@@ -52,6 +52,8 @@ sirpdboy_advancedplus_repo="https://github.com/sirpdboy/luci-app-advancedplus"
 sirpdboy_timecontrol_repo="https://github.com/sirpdboy/luci-app-timecontrol"
 sirpdboy_lucky_repo="https://github.com/sirpdboy/luci-app-lucky"
 sirpdboy_netspeedtest_repo="https://github.com/sirpdboy/netspeedtest"
+sirpdboy_adguardhome_repo="https://github.com/sirpdboy/luci-app-adguardhome"
+
 sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
 
 sbwdaednext_repo="https://github.com/sbwml/luci-app-daed-next"
@@ -85,6 +87,7 @@ clone_repo $sirpdboy_advancedplus_repo main luci-app-advancedplus &
 clone_repo $sirpdboy_timecontrol_repo main luci-app-timecontrol &
 clone_repo $sirpdboy_lucky_repo main luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main netspeedtest &
+clone_repo $sirpdboy_adguardhome_repo main luci-app-adguardhome &
 
 clone_repo $sbw_quickfile_repo main luci-app-quickfile &
 
