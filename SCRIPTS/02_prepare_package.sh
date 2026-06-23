@@ -156,6 +156,21 @@ sed -i 's,@CMDLINE@ noinitrd,noinitrd mitigations=off,g' target/linux/x86/image/
 
 ### ADD PKG 部分 ###
 cp -rf ../OpenWrt-Add ./package/new
+
+mkdir -p ./package/custom
+cp -rf ../luci-app-poweroffdevice ./package/custom/luci-app-poweroffdevice
+cp -rf ../luci-app-ddns-go ./package/custom/ddns-go
+cp -rf ../luci-theme-kucat ./package/custom/luci-theme-kucat
+cp -rf ../luci-app-kucat-config ./package/custom/luci-app-kucat-config
+cp -rf ../luci-app-netdata ./package/custom/luci-app-netdata
+cp -rf ../luci-app-netwizard ./package/custom/luci-app-netwizard
+cp -rf ../luci-app-advancedplus ./package/custom/luci-app-advancedplus
+cp -rf ../luci-app-timecontrol ./package/custom/luci-app-timecontrol
+cp -rf ../luci-app-lucky ./package/custom/luci-app-lucky
+cp -rf ../netspeedtest ./package/custom/netspeedtest
+cp -rf ../luci-app-adguardhome ./package/custom/luci-app-adguardhome
+cp -rf ../luci-app-quickfile ./package/custom/quickfile
+
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed,smartdns}
 rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier,luci-app-filemanager,luci-app-smartdns}
 rm -rf feeds/packages/utils/coremark
