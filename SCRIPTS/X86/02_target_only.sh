@@ -57,6 +57,7 @@ uci -q set luci.main.mediaurlbase='/luci-static/kucat'
 uci -q commit luci
 
 ### 主机名映射 ###
+# 解决安卓原生TV首次连不上网的问题
 uci -q add dhcp domain
 uci -q set dhcp.@domain[-1].name='time.android.com'
 uci -q set dhcp.@domain[-1].ip='203.107.6.88'
