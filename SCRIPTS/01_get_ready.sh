@@ -74,8 +74,13 @@ clone_repo $openwrt_add_repo master OpenWrt-Add &
 clone_repo $dockerman_repo master dockerman &
 clone_repo $docker_lib_repo master docker_lib &
 
+### 自定义第三方包 ###
+# 统一将额外添加的第三方包克隆到 OpenWrt-Custom 目录
+# 该目录只作为源码暂存目录，后续会在 02_prepare_package.sh 中复制到 openwrt/package/custom
 
 mkdir -p OpenWrt-Custom
+
+# Sirpdboy 系列自定义包
 clone_repo $sirpdboy_poweroff_repo master OpenWrt-Custom/luci-app-poweroffdevice &
 clone_repo $sirpdboy_ddns_go_repo main OpenWrt-Custom/luci-app-ddns-go &
 clone_repo $sirpdboy_kucat_repo master OpenWrt-Custom/luci-theme-kucat &
@@ -87,6 +92,8 @@ clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
 clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
 clone_repo $sirpdboy_adguardhome_repo main OpenWrt-Custom/luci-app-adguardhome &
+
+# sbwml 系列自定义包
 clone_repo $sbw_quickfile_repo main OpenWrt-Custom/luci-app-quickfile &
 
 # 等待所有后台任务完成
