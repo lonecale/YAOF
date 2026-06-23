@@ -47,6 +47,11 @@ mkdir -p "$(dirname "$DEFAULT_SETTINGS")"
 cat > "$DEFAULT_SETTINGS" <<'EOF'
 #!/bin/sh
 
+### 主机名 ###
+uci -q set system.@system[0].hostname='EZwrt'
+uci -q commit system
+echo 'EZwrt' > /proc/sys/kernel/hostname 2>/dev/null || true
+
 ### 默认主题 ###
 uci -q set luci.main.mediaurlbase='/luci-static/kucat'
 uci -q commit luci
