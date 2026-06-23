@@ -5,6 +5,11 @@ on:
 #    - cron: 5 6 * * 0
   workflow_dispatch:
     inputs:
+      lan_ip:
+        description: "Default LAN IP, default: 192.168.1.1"
+        required: false
+        type: string
+        default: "192.168.1.1"
       upload_source:
         description: "Upload source folder before build"
         required: false
@@ -31,6 +36,7 @@ jobs:
       targets: "X86"
       upload_source: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_source }}
       build_firmware: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_firmware) || github.event_name != 'workflow_dispatch' }}
+      lan_ip: ${{ inputs.lan_ip }}
 
   sync_badge:
     if: inputs.badge_status != ''
