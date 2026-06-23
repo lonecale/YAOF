@@ -82,7 +82,7 @@ clone_repo $sirpdboy_kucat_repo master OpenWrt-Custom/luci-theme-kucat &
 clone_repo $sirpdboy_kucat_config_repo master OpenWrt-Custom/luci-app-kucat-config &
 clone_repo $sirpdboy_netdata_repo main OpenWrt-Custom/luci-app-netdata &
 clone_repo $sirpdboy_netwizard_repo main OpenWrt-Custom/luci-app-netwizard &
-clone_repo $sirpdboy_advancedplus_repo OpenWrt-Custom/main luci-app-advancedplus &
+clone_repo $sirpdboy_advancedplus_repo main OpenWrt-Custom/luci-app-advancedplus &
 clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
 clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
