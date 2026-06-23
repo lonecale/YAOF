@@ -4,10 +4,6 @@ name: OpenWrt-Matrix
 on:
   workflow_call:
     inputs:
-      lan_ip:
-        required: false
-        type: string
-        default: "192.168.1.1"
       targets:
         required: true
         type: string
@@ -20,14 +16,13 @@ on:
         required: false
         type: boolean
         default: true
-
-  workflow_dispatch:
-    inputs:
       lan_ip:
-        description: "Default LAN IP, default: 192.168.1.1"
         required: false
         type: string
         default: "192.168.1.1"
+
+  workflow_dispatch:
+    inputs:
       targets:
         description: "Select target platforms (comma separated, e.g. R2C,R2S,R3S,R4S,X86 ;leave blank for all, case-insensitive)"
         required: false
@@ -43,6 +38,11 @@ on:
         required: false
         type: boolean
         default: true
+      lan_ip:
+        description: "Default LAN IP, default: 192.168.1.1"
+        required: false
+        type: string
+        default: "192.168.1.1"
 
 jobs:
   setup:
