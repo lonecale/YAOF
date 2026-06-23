@@ -166,6 +166,85 @@ rm -rf feeds/packages/utils/coremark
 sed -i 's/+@KERNEL_DEBUG_INFO_BTF/+vmlinux-btf/' ./package/new/openwrt-einat-ebpf/Makefile
 git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
 
+### OpenClash 核心和规则预置 ###
+# 根据当前平台预置 OpenClash 核心和规则数据库
+# 只有当前平台 config.seed 选择 luci-app-openclash 时才执行
+
+SEED_NAME="${seed:-X86}"
+SEED_FILE="../SEED/${SEED_NAME}/config.seed"
+
+OPENCLASH_DIR="package/new/OpenClash/luci-app-openclash/root/etc/openclash"
+OPENCLASH_CONFIG="package/new/OpenClash/luci-app-openclash/root/etc/config/openclash"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-openclash=y" "$SEED_FILE"; then
+    echo "luci-app-openclash is selected in ${SEED_FILE}"
+
+    if [ -d "$OPENCLASH_DIR" ]; then
+        echo "Found OpenClash directory: $OPENCLASH_DIR"
+
+        case "$SEED_NAME" in
+            X86)
+                CORE_META="https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64-v2.tar.gz"
+                ;;
+            R2C|R2S|R3S|R4S)
+                CORE_META="https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz"
+                ;;
+            *)
+                CORE_META=""
+                echo "Unknown target ${SEED_NAME}, skip OpenClash core preset"
+                ;;
+        esac
+
+        mkdir -p "$OPENCLASH_DIR/core"
+
+        curl -fL -o "$OPENCLASH_DIR/Country.mmdb" \
+            "https://github.com/xream/geoip/releases/latest/download/ipinfo.country.mmdb" \
+            || echo "Country.mmdb download failed, skip"
+
+        curl -fL -o "$OPENCLASH_DIR/GeoSite.dat" \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geosite.dat" \
+            || echo "GeoSite.dat download failed, skip"
+
+        curl -fL -o "$OPENCLASH_DIR/GeoIP.dat" \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geoip.dat" \
+            || echo "GeoIP.dat download failed, skip"
+
+        if [ -n "$CORE_META" ]; then
+            if curl -fL -o "$OPENCLASH_DIR/core/meta.tar.gz" "$CORE_META"; then
+                tar -zxf "$OPENCLASH_DIR/core/meta.tar.gz" -C "$OPENCLASH_DIR/core"
+
+                if [ -f "$OPENCLASH_DIR/core/clash" ]; then
+                    mv "$OPENCLASH_DIR/core/clash" "$OPENCLASH_DIR/core/clash_meta"
+                    chmod +x "$OPENCLASH_DIR/core/clash_meta"
+                else
+                    echo "OpenClash meta core extracted, but clash binary not found"
+                fi
+
+                rm -f "$OPENCLASH_DIR/core/meta.tar.gz"
+            else
+                echo "OpenClash meta core download failed, skip core preset"
+            fi
+        fi
+
+        if [ -f "$OPENCLASH_CONFIG" ]; then
+            echo "Found OpenClash config: $OPENCLASH_CONFIG"
+
+            sed -i "s|option geo_custom_url.*|option geo_custom_url 'https://github.com/xream/geoip/releases/latest/download/ipinfo.country.mmdb'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option geosite_custom_url.*|option geosite_custom_url 'https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option geoip_custom_url.*|option geoip_custom_url 'https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option geoasn_custom_url.*|option geoasn_custom_url 'https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option chnr_custom_url.*|option chnr_custom_url 'https://us.cooluc.com/cidr/cn_ipv4.cidr'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option chnr6_custom_url.*|option chnr6_custom_url 'https://us.cooluc.com/cidr/cn_ipv6.cidr'|" "$OPENCLASH_CONFIG"
+        else
+            echo "OpenClash config file not found: $OPENCLASH_CONFIG"
+        fi
+    else
+        echo "OpenClash directory not found: $OPENCLASH_DIR"
+    fi
+else
+    echo "luci-app-openclash is not selected in ${SEED_FILE}, skip OpenClash preset"
+fi
+
 ### 获取额外的 LuCI 应用、主题和依赖 ###
 # RK
 sed -i '/REQUIRE_IMAGE_METADATA/d' target/linux/rockchip/armv8/base-files/lib/upgrade/platform.sh
