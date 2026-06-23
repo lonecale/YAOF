@@ -39,8 +39,14 @@ zxlhhyccc_repo="https://github.com/zxlhhyccc/bf-package-master"
 linkease_repo="https://github.com/linkease/openwrt-app-actions"
 linkease_pkg_repo="https://github.com/jjm2473/packages"
 linkease_luci_repo="https://github.com/jjm2473/luci"
-
 sirpdboy_repo="https://github.com/sirpdboy/sirpdboy-package"
+sbwdaednext_repo="https://github.com/sbwml/luci-app-daed-next"
+lucidaednext_repo="https://github.com/QiuSimons/luci-app-daed-next"
+sbwfw876_repo="https://github.com/sbwml/openwrt_helloworld"
+sbw_pkg_repo="https://github.com/sbwml/openwrt_pkgs"
+natmap_repo="https://github.com/blueberry-pie-11/luci-app-natmap"
+xwrt_repo="https://github.com/QiuSimons/openwrt-natflow"
+
 sirpdboy_poweroff_repo="https://github.com/sirpdboy/luci-app-poweroffdevice"
 sirpdboy_ddns_go_repo="https://github.com/sirpdboy/luci-app-ddns-go"
 sirpdboy_kucat_repo="https://github.com/sirpdboy/luci-theme-kucat"
@@ -52,15 +58,7 @@ sirpdboy_timecontrol_repo="https://github.com/sirpdboy/luci-app-timecontrol"
 sirpdboy_lucky_repo="https://github.com/sirpdboy/luci-app-lucky"
 sirpdboy_netspeedtest_repo="https://github.com/sirpdboy/netspeedtest"
 sirpdboy_adguardhome_repo="https://github.com/sirpdboy/luci-app-adguardhome"
-
 sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
-
-sbwdaednext_repo="https://github.com/sbwml/luci-app-daed-next"
-lucidaednext_repo="https://github.com/QiuSimons/luci-app-daed-next"
-sbwfw876_repo="https://github.com/sbwml/openwrt_helloworld"
-sbw_pkg_repo="https://github.com/sbwml/openwrt_pkgs"
-natmap_repo="https://github.com/blueberry-pie-11/luci-app-natmap"
-xwrt_repo="https://github.com/QiuSimons/openwrt-natflow"
 
 # 开始克隆仓库，并行执行
 clone_repo $openwrt_repo $latest_release openwrt &
@@ -76,19 +74,20 @@ clone_repo $openwrt_add_repo master OpenWrt-Add &
 clone_repo $dockerman_repo master dockerman &
 clone_repo $docker_lib_repo master docker_lib &
 
-clone_repo $sirpdboy_poweroff_repo master luci-app-poweroffdevice &
-clone_repo $sirpdboy_ddns_go_repo main luci-app-ddns-go &
-clone_repo $sirpdboy_kucat_repo master luci-theme-kucat &
-clone_repo $sirpdboy_kucat_config_repo master luci-app-kucat-config &
-clone_repo $sirpdboy_netdata_repo main luci-app-netdata &
-clone_repo $sirpdboy_netwizard_repo main luci-app-netwizard &
-clone_repo $sirpdboy_advancedplus_repo main luci-app-advancedplus &
-clone_repo $sirpdboy_timecontrol_repo main luci-app-timecontrol &
-clone_repo $sirpdboy_lucky_repo main luci-app-lucky &
-clone_repo $sirpdboy_netspeedtest_repo main netspeedtest &
-clone_repo $sirpdboy_adguardhome_repo main luci-app-adguardhome &
 
-clone_repo $sbw_quickfile_repo main luci-app-quickfile &
+mkdir -p OpenWrt-Custom
+clone_repo $sirpdboy_poweroff_repo master OpenWrt-Custom/luci-app-poweroffdevice &
+clone_repo $sirpdboy_ddns_go_repo main OpenWrt-Custom/luci-app-ddns-go &
+clone_repo $sirpdboy_kucat_repo master OpenWrt-Custom/luci-theme-kucat &
+clone_repo $sirpdboy_kucat_config_repo master OpenWrt-Custom/luci-app-kucat-config &
+clone_repo $sirpdboy_netdata_repo main OpenWrt-Custom/luci-app-netdata &
+clone_repo $sirpdboy_netwizard_repo main OpenWrt-Custom/luci-app-netwizard &
+clone_repo $sirpdboy_advancedplus_repo OpenWrt-Custom/main luci-app-advancedplus &
+clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
+clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
+clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
+clone_repo $sirpdboy_adguardhome_repo main OpenWrt-Custom/luci-app-adguardhome &
+clone_repo $sbw_quickfile_repo main OpenWrt-Custom/luci-app-quickfile &
 
 # 等待所有后台任务完成
 wait
