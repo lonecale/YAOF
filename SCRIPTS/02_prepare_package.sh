@@ -197,25 +197,26 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-openclash=y" "$SEED_
 
         mkdir -p "$OPENCLASH_DIR/core"
 
-        curl -fL -o "$OPENCLASH_DIR/Country.mmdb" \
+        curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/Country.mmdb" \
             "https://github.com/xream/geoip/releases/latest/download/ipinfo.country.mmdb" \
             || echo "Country.mmdb download failed, skip"
 
-        curl -fL -o "$OPENCLASH_DIR/GeoSite.dat" \
+        curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/GeoSite.dat" \
             "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geosite.dat" \
             || echo "GeoSite.dat download failed, skip"
 
-        curl -fL -o "$OPENCLASH_DIR/GeoIP.dat" \
+        curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/GeoIP.dat" \
             "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geoip.dat" \
             || echo "GeoIP.dat download failed, skip"
 
         if [ -n "$CORE_META" ]; then
-            if curl -fL -o "$OPENCLASH_DIR/core/meta.tar.gz" "$CORE_META"; then
+            if curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/core/meta.tar.gz" "$CORE_META"; then
                 tar -zxf "$OPENCLASH_DIR/core/meta.tar.gz" -C "$OPENCLASH_DIR/core"
 
                 if [ -f "$OPENCLASH_DIR/core/clash" ]; then
-                    mv "$OPENCLASH_DIR/core/clash" "$OPENCLASH_DIR/core/clash_meta"
+                    mv -f "$OPENCLASH_DIR/core/clash" "$OPENCLASH_DIR/core/clash_meta"
                     chmod +x "$OPENCLASH_DIR/core/clash_meta"
+                    echo "OpenClash meta core preset done"
                 else
                     echo "OpenClash meta core extracted, but clash binary not found"
                 fi
@@ -233,8 +234,11 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-openclash=y" "$SEED_
             sed -i "s|option geosite_custom_url.*|option geosite_custom_url 'https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat'|" "$OPENCLASH_CONFIG"
             sed -i "s|option geoip_custom_url.*|option geoip_custom_url 'https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat'|" "$OPENCLASH_CONFIG"
             sed -i "s|option geoasn_custom_url.*|option geoasn_custom_url 'https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb'|" "$OPENCLASH_CONFIG"
-            sed -i "s|option chnr_custom_url.*|option chnr_custom_url 'https://us.cooluc.com/cidr/cn_ipv4.cidr'|" "$OPENCLASH_CONFIG"
-            sed -i "s|option chnr6_custom_url.*|option chnr6_custom_url 'https://us.cooluc.com/cidr/cn_ipv6.cidr'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option chnr_custom_url.*|option chnr_custom_url 'https://github.com/DH-Teams/DH-Geo_AS_IP_CN/raw/main/Geo_AS_IP_CN.txt'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option chnr6_custom_url.*|option chnr6_custom_url 'https://raw.githubusercontent.com/DH-Teams/DH-Geo_AS_IP_CN/main/Geo_AS_IP_CN_6.txt'|" "$OPENCLASH_CONFIG"
+            # sed -i "s|option chnr_custom_url.*|option chnr_custom_url 'https://us.cooluc.com/cidr/cn_ipv4.cidr'|" "$OPENCLASH_CONFIG"
+            # sed -i "s|option chnr6_custom_url.*|option chnr6_custom_url 'https://us.cooluc.com/cidr/cn_ipv6.cidr'|" "$OPENCLASH_CONFIG"
+            echo "OpenClash default URLs patched"
         else
             echo "OpenClash config file not found: $OPENCLASH_CONFIG"
         fi
@@ -243,6 +247,44 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-openclash=y" "$SEED_
     fi
 else
     echo "luci-app-openclash is not selected in ${SEED_FILE}, skip OpenClash preset"
+fi
+
+### PassWall 规则预置 ###
+# 只有当前平台 config.seed 选择 luci-app-passwall 时才更新 gfwlist
+
+PASSWALL_GFWLIST="package/new/openwrt_helloworld/luci-app-passwall/root/usr/share/passwall/rules/gfwlist"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-passwall=y" "$SEED_FILE"; then
+    echo "luci-app-passwall is selected in ${SEED_FILE}"
+
+    if [ -d "$(dirname "$PASSWALL_GFWLIST")" ]; then
+        curl --retry 3 --connect-timeout 15 -fL -o "$PASSWALL_GFWLIST" \
+            "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt" \
+            || echo "PassWall gfwlist download failed, skip"
+    else
+        echo "PassWall rules directory not found: $(dirname "$PASSWALL_GFWLIST")"
+    fi
+else
+    echo "luci-app-passwall is not selected in ${SEED_FILE}, skip PassWall gfwlist"
+fi
+
+### WeChatPush Logo 预置 ###
+# 只有当前平台 config.seed 选择 luci-app-wechatpush 时才替换 通知logo
+
+WECHATPUSH_LOGO="package/new/luci-app-wechatpush/root/usr/share/wechatpush/api/logo.jpg"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+    echo "luci-app-wechatpush is selected in ${SEED_FILE}"
+
+    if [ -d "$(dirname "$WECHATPUSH_LOGO")" ]; then
+        curl --retry 3 --connect-timeout 15 -fL -o "$WECHATPUSH_LOGO" \
+            "https://raw.githubusercontent.com/lonecale/Groceries/main/Logo/logo.jpg" \
+            || echo "WeChatPush logo download failed, skip"
+    else
+        echo "WeChatPush logo directory not found: $(dirname "$WECHATPUSH_LOGO")"
+    fi
+else
+    echo "luci-app-wechatpush is not selected in ${SEED_FILE}, skip WeChatPush logo"
 fi
 
 ### 获取额外的 LuCI 应用、主题和依赖 ###
