@@ -73,6 +73,8 @@ clone_repo $openwrt_pkg_repo master openwrt_pkg_ma &
 clone_repo $openwrt_add_repo master OpenWrt-Add &
 clone_repo $dockerman_repo master dockerman &
 clone_repo $docker_lib_repo master docker_lib &
+clone_repo $immortalwrt_pkg_repo openwrt-25.12 immortalwrt_pkg_25 &
+clone_repo $immortalwrt_luci_repo openwrt-25.12 immortalwrt_luci_25 &
 
 ### 自定义第三方包 ###
 # 统一将额外添加的第三方包克隆到 OpenWrt-Custom 目录
