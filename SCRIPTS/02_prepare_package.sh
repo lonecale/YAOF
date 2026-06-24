@@ -167,8 +167,11 @@ rm -rf feeds/packages/utils/coremark
 sed -i 's/+@KERNEL_DEBUG_INFO_BTF/+vmlinux-btf/' ./package/new/openwrt-einat-ebpf/Makefile
 git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
 
-### 避免同名包冲突：优先使用 OpenWrt-Custom 中的包 ###
-
+### SmartDNS ###
+# 使用 ImmortalWrt openwrt-25.12 的 smartdns / luci-app-smartdns
+# 放回 feeds 原位置
+cp -rf ../immortalwrt_pkg_25/net/smartdns ./feeds/packages/net/smartdns
+cp -rf ../immortalwrt_luci_25/applications/luci-app-smartdns ./feeds/luci/applications/luci-app-smartdns
 
 ### OpenClash 核心和规则预置 ###
 # 根据当前平台预置 OpenClash 核心和规则数据库
