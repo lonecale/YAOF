@@ -59,6 +59,7 @@ sirpdboy_lucky_repo="https://github.com/sirpdboy/luci-app-lucky"
 sirpdboy_netspeedtest_repo="https://github.com/sirpdboy/netspeedtest"
 sirpdboy_adguardhome_repo="https://github.com/sirpdboy/luci-app-adguardhome"
 sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
+sundaqiang_wolplus_repo="https://github.com/sundaqiang/openwrt-packages"
 
 # 开始克隆仓库，并行执行
 clone_repo $openwrt_repo $latest_release openwrt &
@@ -93,7 +94,13 @@ clone_repo $sirpdboy_advancedplus_repo main OpenWrt-Custom/luci-app-advancedplus
 clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
 clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
-clone_repo $sirpdboy_adguardhome_repo main OpenWrt-Custom/luci-app-adguardhome &
+clone_repo $sirpdboy_adguardhome_repo js OpenWrt-Custom/luci-app-adguardhome &
+
+(
+  clone_repo "$sundaqiang_wolplus_repo" master luci-app-wolplus &&
+  mv luci-app-wolplus/luci-app-wolplus OpenWrt-Custom/
+  rm -rf luci-app-wolplus
+) &
 
 # sbwml 系列自定义包
 clone_repo $sbw_quickfile_repo main OpenWrt-Custom/luci-app-quickfile &
