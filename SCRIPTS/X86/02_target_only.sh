@@ -64,10 +64,10 @@ uci -q set dhcp.@domain[-1].ip='203.107.6.88'
 
 ### DHCP 设置 ###
 # 旁路网关模式：主路由负责 DHCP，本机不提供 DHCP 服务
-#uci -q set dhcp.lan.ignore='1'
-#uci -q set dhcp.lan.dhcpv4='disabled'
+uci -q set dhcp.lan.ignore='1'
+uci -q set dhcp.lan.dhcpv4='disabled'
 # 禁用动态分配，只允许静态租约
-#uci -q set dhcp.lan.dynamicdhcp='0'
+uci -q set dhcp.lan.dynamicdhcp='0'
 
 
 # 关闭 IPv6 RA、DHCPv6、NDP，避免本机在 LAN 侧下发 IPv6 配置
@@ -76,7 +76,7 @@ uci -q set dhcp.@domain[-1].ip='203.107.6.88'
 #uci -q delete dhcp.lan.ra_management
 #uci -q delete dhcp.lan.ndp
 
-#uci -q commit dhcp
+uci -q commit dhcp
 
 ### 网络设置 ###
 # 旁路网关模式：本机默认网关和 DNS 指向主路由
