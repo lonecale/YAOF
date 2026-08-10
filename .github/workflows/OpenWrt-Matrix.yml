@@ -16,6 +16,10 @@ on:
         required: false
         type: boolean
         default: true
+      lan_ip:
+        required: false
+        type: string
+        default: "192.168.1.1"
 
   workflow_dispatch:
     inputs:
@@ -34,6 +38,11 @@ on:
         required: false
         type: boolean
         default: true
+      lan_ip:
+        description: "Default LAN IP, default: 192.168.1.1"
+        required: false
+        type: string
+        default: "192.168.1.1"
 
 jobs:
   setup:
@@ -186,10 +195,32 @@ jobs:
 
       - name: Prepare Package
         working-directory: ${{ github.workspace }}/openwrt
+        env:
+          LAN_IP_INPUT: ${{ inputs.lan_ip }}
         run: |
           cp -r ../SCRIPTS/. ./
           /bin/bash 02_prepare_package.sh
           /bin/bash 02_target_only.sh
+
+          ### 默认 LAN IP ###
+          LAN_IP="${LAN_IP_INPUT:-192.168.1.1}"
+          
+          if echo "$LAN_IP" | grep -Eq '^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'; then
+            echo "Set default LAN IP to ${LAN_IP}"
+          
+            if grep -qE 'lan\) ipad=\$\{ipaddr:-"[^"]+"\} ;;' package/base-files/files/bin/config_generate; then
+              sed -i -E 's#lan\) ipad=\$\{ipaddr:-"[^"]+"\} ;;#lan) ipad=${ipaddr:-"'"$LAN_IP"'"} ;;#g' package/base-files/files/bin/config_generate
+              grep -n 'lan) ipad=' package/base-files/files/bin/config_generate
+            else
+              echo "LAN default IP pattern not found in config_generate"
+              grep -n 'ipad=' package/base-files/files/bin/config_generate || true
+              exit 1
+            fi
+          else
+            echo "Invalid LAN IP: ${LAN_IP}"
+            exit 1
+          fi
+
           /bin/bash 04_remove_upx.sh
 
       - name: QTMDFW4
