@@ -47,13 +47,26 @@ sbw_pkg_repo="https://github.com/sbwml/openwrt_pkgs"
 natmap_repo="https://github.com/blueberry-pie-11/luci-app-natmap"
 xwrt_repo="https://github.com/QiuSimons/openwrt-natflow"
 
+sirpdboy_poweroff_repo="https://github.com/sirpdboy/luci-app-poweroffdevice"
+sirpdboy_ddns_go_repo="https://github.com/sirpdboy/luci-app-ddns-go"
+sirpdboy_kucat_repo="https://github.com/sirpdboy/luci-theme-kucat"
+sirpdboy_kucat_config_repo="https://github.com/sirpdboy/luci-app-kucat-config"
+sirpdboy_netwizard_repo="https://github.com/sirpdboy/luci-app-netwizard"
+sirpdboy_netdata_repo="https://github.com/sirpdboy/luci-app-netdata"
+sirpdboy_advancedplus_repo="https://github.com/sirpdboy/luci-app-advancedplus"
+sirpdboy_timecontrol_repo="https://github.com/sirpdboy/luci-app-timecontrol"
+sirpdboy_lucky_repo="https://github.com/sirpdboy/luci-app-lucky"
+sirpdboy_netspeedtest_repo="https://github.com/sirpdboy/netspeedtest"
+sirpdboy_adguardhome_repo="https://github.com/sirpdboy/luci-app-adguardhome"
+sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
+sundaqiang_wolplus_repo="https://github.com/sundaqiang/openwrt-packages"
+
 # 开始克隆仓库，并行执行
 clone_repo $openwrt_repo $latest_release openwrt &
 #clone_repo $openwrt_repo openwrt-25.12 openwrt &
 clone_repo $openwrt_repo openwrt-25.12 openwrt_snap &
 clone_repo $immortalwrt_repo openwrt-24.10 immortalwrt_24 &
 clone_repo $immortalwrt_repo openwrt-23.05 immortalwrt_23 &
-
 clone_repo $lede_repo master lede &
 clone_repo $lede_pkg_repo master lede_pkg_ma &
 clone_repo $openwrt_repo main openwrt_ma &
@@ -61,6 +74,37 @@ clone_repo $openwrt_pkg_repo master openwrt_pkg_ma &
 clone_repo $openwrt_add_repo master OpenWrt-Add &
 clone_repo $dockerman_repo master dockerman &
 clone_repo $docker_lib_repo master docker_lib &
+clone_repo $immortalwrt_pkg_repo openwrt-25.12 immortalwrt_pkg_25 &
+clone_repo $immortalwrt_luci_repo openwrt-25.12 immortalwrt_luci_25 &
+
+### 自定义第三方包 ###
+# 统一将额外添加的第三方包克隆到 OpenWrt-Custom 目录
+# 该目录只作为源码暂存目录，后续会在 02_prepare_package.sh 中复制到 openwrt/package/custom
+
+mkdir -p OpenWrt-Custom
+
+# Sirpdboy 系列自定义包
+clone_repo $sirpdboy_poweroff_repo master OpenWrt-Custom/luci-app-poweroffdevice &
+clone_repo $sirpdboy_ddns_go_repo main OpenWrt-Custom/luci-app-ddns-go &
+clone_repo $sirpdboy_kucat_repo master OpenWrt-Custom/luci-theme-kucat &
+clone_repo $sirpdboy_kucat_config_repo master OpenWrt-Custom/luci-app-kucat-config &
+clone_repo $sirpdboy_netdata_repo main OpenWrt-Custom/luci-app-netdata &
+clone_repo $sirpdboy_netwizard_repo main OpenWrt-Custom/luci-app-netwizard &
+clone_repo $sirpdboy_advancedplus_repo main OpenWrt-Custom/luci-app-advancedplus &
+clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
+clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
+clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
+clone_repo $sirpdboy_adguardhome_repo js OpenWrt-Custom/luci-app-adguardhome &
+
+(
+  clone_repo "$sundaqiang_wolplus_repo" master luci-app-wolplus &&
+  mv luci-app-wolplus/luci-app-wolplus OpenWrt-Custom/
+  rm -rf luci-app-wolplus
+) &
+
+# sbwml 系列自定义包
+clone_repo $sbw_quickfile_repo main OpenWrt-Custom/luci-app-quickfile &
+
 # 等待所有后台任务完成
 wait
 
