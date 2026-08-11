@@ -284,6 +284,12 @@ jobs:
           prefix: ${{ github.workspace }}/openwrt
           skip_saving: ${{ !inputs.build_firmware }}
 
+      - name: Clean SmartDNS
+        if: inputs.build_firmware
+        working-directory: ${{ github.workspace }}/openwrt
+        run: |
+          make package/feeds/packages/smartdns/clean
+
       - name: Make Download
         if: inputs.build_firmware
         working-directory: ${{ github.workspace }}/openwrt
