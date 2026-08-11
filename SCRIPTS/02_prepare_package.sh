@@ -160,6 +160,9 @@ cp -rf ../OpenWrt-Add ./package/new
 # 删除 OpenWrt-Add 顶层遗留的旧版 trojan-plus，避免重复
 # 保留 package/new/openwrt_helloworld/trojan-plus
 # 来源：sbwml/openwrt_helloworld
+# QiuSimons 已将 PassWall 中 trojan-plus 默认设为 n，如需使用需手动开启
+# 如需启用，可在 config.seed 中加入：
+# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus=y
 rm -rf ./package/new/trojan-plus
 
 # 添加自定义第三方包
