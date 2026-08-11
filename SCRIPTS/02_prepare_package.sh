@@ -156,13 +156,16 @@ sed -i 's,@CMDLINE@ noinitrd,noinitrd mitigations=off,g' target/linux/x86/image/
 
 ### ADD PKG 部分 ###
 cp -rf ../OpenWrt-Add ./package/new
-# 删除 OpenWrt-Add 顶层遗留的旧版 trojan-plus
-# PassWall 自带新版 trojan-plus：
-# package/new/openwrt_helloworld/trojan-plus
+
+# 删除 OpenWrt-Add 顶层遗留的旧版 trojan-plus，避免重复
+# 保留 package/new/openwrt_helloworld/trojan-plus
+# 来源：sbwml/openwrt_helloworld
 rm -rf ./package/new/trojan-plus
+
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
+
 rm -rf package/new/openwrt_pkgs/{luci-app-netdata,luci-app-netspeedtest,luci-app-adguardhome}
 
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed,smartdns}
