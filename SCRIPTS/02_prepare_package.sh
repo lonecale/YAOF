@@ -172,6 +172,11 @@ git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
 # 放回 feeds 原位置
 cp -rf ../immortalwrt_pkg_25/net/smartdns ./feeds/packages/net/smartdns
 cp -rf ../immortalwrt_luci_25/applications/luci-app-smartdns ./feeds/luci/applications/luci-app-smartdns
+# SmartDNS WebUI 编译依赖
+rm -rf ./feeds/packages/devel/rust-bindgen
+mkdir -p ./feeds/packages/devel
+cp -rf ../immortalwrt_pkg_25/devel/rust-bindgen  ./feeds/packages/devel/rust-bindgen
+
 
 ### OpenClash 核心和规则预置 ###
 # 根据当前平台预置 OpenClash 核心和规则数据库
