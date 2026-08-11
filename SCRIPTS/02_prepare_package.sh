@@ -156,6 +156,10 @@ sed -i 's,@CMDLINE@ noinitrd,noinitrd mitigations=off,g' target/linux/x86/image/
 
 ### ADD PKG 部分 ###
 cp -rf ../OpenWrt-Add ./package/new
+# 删除 OpenWrt-Add 顶层遗留的旧版 trojan-plus
+# PassWall 自带新版 trojan-plus：
+# package/new/openwrt_helloworld/trojan-plus
+rm -rf ./package/new/trojan-plus
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
