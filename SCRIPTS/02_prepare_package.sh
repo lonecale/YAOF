@@ -165,11 +165,6 @@ cp -rf ../OpenWrt-Add ./package/new
 # CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus=y
 rm -rf ./package/new/trojan-plus
 
-# Q DNS Client
-rm -rf ./feeds/packages/net/q
-cp -rf ../immortalwrt_pkg_25/net/q ./feeds/packages/net/q
-./scripts/feeds install -f q
-
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
@@ -182,6 +177,11 @@ rm -rf feeds/packages/utils/coremark
 sed -i 's/+@KERNEL_DEBUG_INFO_BTF/+vmlinux-btf/' ./package/new/openwrt-einat-ebpf/Makefile
 git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
 
+
+# Q DNS Client
+rm -rf ./feeds/packages/net/q
+cp -rf ../immortalwrt_pkg_25/net/q ./feeds/packages/net/q
+
 ### SmartDNS ###
 # 使用 ImmortalWrt openwrt-25.12 的 smartdns / luci-app-smartdns
 # 放回 feeds 原位置
@@ -191,7 +191,6 @@ cp -rf ../immortalwrt_luci_25/applications/luci-app-smartdns ./feeds/luci/applic
 rm -rf ./feeds/packages/devel/rust-bindgen
 mkdir -p ./feeds/packages/devel
 cp -rf ../immortalwrt_pkg_25/devel/rust-bindgen  ./feeds/packages/devel/rust-bindgen
-
 
 ### OpenClash 核心和规则预置 ###
 # 根据当前平台预置 OpenClash 核心和规则数据库
