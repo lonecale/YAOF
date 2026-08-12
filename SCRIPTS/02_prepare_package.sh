@@ -165,6 +165,11 @@ cp -rf ../OpenWrt-Add ./package/new
 # CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus=y
 rm -rf ./package/new/trojan-plus
 
+# Q DNS Client
+rm -rf ./feeds/packages/net/q
+cp -rf ../immortalwrt_pkg_25/net/q ./feeds/packages/net/q
+./scripts/feeds install -f q
+
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
