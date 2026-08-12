@@ -112,7 +112,6 @@ CONFIG_PACKAGE_procps-ng-top=y
 ### NETWORK & DNS DIAGNOSTICS ###
 CONFIG_PACKAGE_bind-dig=y
 CONFIG_PACKAGE_q=y
-CONFIG_PACKAGE_ip-full=y
 
 
 ### APPLICATION ###
