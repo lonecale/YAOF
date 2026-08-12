@@ -192,12 +192,34 @@ rm -rf ./feeds/packages/devel/rust-bindgen
 mkdir -p ./feeds/packages/devel
 cp -rf ../immortalwrt_pkg_25/devel/rust-bindgen  ./feeds/packages/devel/rust-bindgen
 
+SEED_NAME="${seed:-X86}"
+SEED_FILE="../SEED/${SEED_NAME}/config.seed"
+
+### AdvancedPlus：默认关闭 ZSH 后台菜单 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-advancedplus=y" "$SEED_FILE"; then
+    ADVANCEDPLUS_CONFIG="./package/custom/luci-app-advancedplus/root/etc/config/advancedplus"
+    [ -f "${ADVANCEDPLUS_CONFIG}.bak" ] || cp -af "$ADVANCEDPLUS_CONFIG" "${ADVANCEDPLUS_CONFIG}.bak"
+    sed -i '/^[[:space:]]*option usshmenu/d' "$ADVANCEDPLUS_CONFIG"
+    sed -i "/^config basic/a\\$(printf '\t')option usshmenu '1'" "$ADVANCEDPLUS_CONFIG"
+fi
+
+### KuCat Config：补充 kucat-config RPCD 执行权限 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-kucat-config=y" "$SEED_FILE"; then
+    KUCAT_ACL="./package/custom/luci-app-kucat-config/root/usr/share/rpcd/acl.d/luci-app-kucat-config.json"
+    [ -f "${KUCAT_ACL}.bak" ] || cp -af "$KUCAT_ACL" "${KUCAT_ACL}.bak"
+    grep -q '"/usr/bin/kucat-config"' "$KUCAT_ACL" || sed -i 's#^\([[:space:]]*\)"/etc/init.d/kucat": \[ "exec" \],#\1"/etc/init.d/kucat": [ "exec" ],\n\1"/usr/bin/kucat-config": [ "exec" ],#' "$KUCAT_ACL"
+fi
+
+### KuCat Theme：默认显示完整菜单 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-theme-kucat=y" "$SEED_FILE"; then
+    KUCAT_MENU="./package/custom/luci-theme-kucat/htdocs/luci-static/resources/menu-kucat.js"
+    [ -f "${KUCAT_MENU}.bak" ] || cp -af "$KUCAT_MENU" "${KUCAT_MENU}.bak"
+    sed -i "s/currentCategory: 'basic'/currentCategory: 'allmenu'/" "$KUCAT_MENU"
+fi
+
 ### OpenClash 核心和规则预置 ###
 # 根据当前平台预置 OpenClash 核心和规则数据库
 # 只有当前平台 config.seed 选择 luci-app-openclash 时才执行
-
-SEED_NAME="${seed:-X86}"
-SEED_FILE="../SEED/${SEED_NAME}/config.seed"
 
 OPENCLASH_DIR="package/new/OpenClash/luci-app-openclash/root/etc/openclash"
 OPENCLASH_CONFIG="package/new/OpenClash/luci-app-openclash/root/etc/config/openclash"
