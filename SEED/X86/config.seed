@@ -103,11 +103,19 @@ CONFIG_LUCI_LANG_en=y
 CONFIG_PACKAGE_luci-nginx=y
 CONFIG_PACKAGE_luci-compat=y
 
+### procps-ng Utilities
+CONFIG_PACKAGE_procps-ng=y
+CONFIG_PACKAGE_procps-ng-free=y
+CONFIG_PACKAGE_procps-ng-ps=y
+CONFIG_PACKAGE_procps-ng-top=y
+
 ### APPLICATION ###
 CONFIG_PACKAGE_luci-app-ttyd=y
 CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
+
 CONFIG_PACKAGE_snmpd-nossl=y
 CONFIG_PACKAGE_openssh-sftp-server=y
+
 CONFIG_PACKAGE_luci-app-statistics=y
 CONFIG_PACKAGE_luci-i18n-statistics-zh-cn=y
 CONFIG_PACKAGE_qemu-ga=y
