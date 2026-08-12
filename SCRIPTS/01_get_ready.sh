@@ -94,7 +94,7 @@ clone_repo $sirpdboy_advancedplus_repo main OpenWrt-Custom/luci-app-advancedplus
 clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
 clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
-clone_repo $sirpdboy_adguardhome_repo js OpenWrt-Custom/luci-app-adguardhome &
+clone_repo $sirpdboy_adguardhome_repo main OpenWrt-Custom/luci-app-adguardhome &
 
 (
   clone_repo "$sundaqiang_wolplus_repo" master luci-app-wolplus &&
