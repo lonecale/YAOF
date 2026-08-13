@@ -224,6 +224,21 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED
     grep -q '"/proc/\*/net/arp"' "$WECHATPUSH_ACL" || sed -i '/"\/proc\/net\/arp": \[ "read" \],/a\				"/proc/*/net/arp": [ "read" ],' "$WECHATPUSH_ACL"
 fi
 
+### ZeroTier：关闭状态不执行 zerotier-fw4 ###
+if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=y" "$SEED_FILE"; then
+    ZEROTIER_INIT="./package/new/imm_pkg/zerotier/files/etc/init.d/zerotier"
+    [ -f "${ZEROTIER_INIT}.bak" ] || cp -af "$ZEROTIER_INIT" "${ZEROTIER_INIT}.bak"
+
+    sed -i '/^service_started() {$/,/^}$/c\
+service_started() {\
+\tlocal enabled\
+\tconfig_load zerotier\
+\tconfig_get_bool enabled '\''global'\'' '\''enabled'\'' 0\
+\t[ "${enabled}" -eq 1 ] || return 0\
+\tzerotier-fw4 -s\
+}' "$ZEROTIER_INIT"
+fi
+
 ### OpenClash 核心和规则预置 ###
 # 根据当前平台预置 OpenClash 核心和规则数据库
 # 只有当前平台 config.seed 选择 luci-app-openclash 时才执行
