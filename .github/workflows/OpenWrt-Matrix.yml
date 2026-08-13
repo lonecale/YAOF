@@ -320,6 +320,50 @@ jobs:
           echo "===== ttyd rootfs files ====="
           find ./build_dir \( -path '*/root-*/etc/init.d/ttyd' -o -path '*/root-*/etc/config/ttyd' -o -path '*/root-*/etc/rc.d/*ttyd*' \) -print 2>/dev/null || true
 
+      - name: Check miniupnpd final config
+        if: inputs.build_firmware
+        working-directory: ${{ github.workspace }}/openwrt
+        run: |
+          echo "===== source upnpd.config ====="
+          grep -n "enabled" ./feeds/packages/net/miniupnpd/files/upnpd.config || true
+
+          echo "===== rootfs upnpd.config ====="
+          find ./build_dir -path '*/root-*/etc/config/upnpd' -exec sh -c 'echo "----- $1"; cat "$1"' _ {} \; 2>/dev/null || true
+
+          echo "===== miniupnpd rc.d ====="
+          find ./build_dir -path '*/root-*/etc/rc.d/*miniupnpd*' -ls 2>/dev/null || true
+
+          echo "===== uci-defaults mentioning upnp ====="
+          grep -RniE 'upnpd|miniupnpd' ./build_dir/*/root-*/etc/uci-defaults 2>/dev/null || true
+
+          echo "===== all source references changing upnp ====="
+          grep -RniE 'uci.*upnpd|upnpd.*enabled|miniupnpd.*enable' ./package ./feeds 2>/dev/null | head -200 || true
+
+      - name: Check LuCI ACL and translations
+        if: inputs.build_firmware
+        working-directory: ${{ github.workspace }}/openwrt
+        run: |
+          echo "===== ACL: wechatpush / advanced ====="
+          find ./package ./feeds -path '*/rpcd/acl.d/*' -type f 2>/dev/null | grep -Ei 'wechat|advanced' || true
+
+          echo "===== WechatPush ACL contents ====="
+          find ./package ./feeds -path '*/rpcd/acl.d/*wechatpush*.json' -type f -exec sh -c 'echo "----- $1"; cat "$1"' _ {} \; 2>/dev/null || true
+
+          echo "===== WechatPush fs calls ====="
+          grep -RniE 'fs\.(read|read_direct|exec|exec_direct)' ./package ./feeds 2>/dev/null | grep -i wechatpush | head -200 || true
+
+          echo "===== AdvancedPlus ACL contents ====="
+          find ./package ./feeds -path '*/rpcd/acl.d/*advancedplus*.json' -type f -exec sh -c 'echo "----- $1"; cat "$1"' _ {} \; 2>/dev/null || true
+
+          echo "===== AdGuardHome untranslated strings ====="
+          grep -RniE 'Main Config|Core Config|Other Config' ./package ./feeds 2>/dev/null | head -100 || true
+
+          echo "===== WOL Plus untranslated strings ====="
+          grep -RniE 'Host Clients|Wake Up Host' ./package ./feeds 2>/dev/null | head -100 || true
+
+          echo "===== TimeControl untranslated strings ====="
+          grep -RniE 'Time Control Mode|Allow Start Time|Allow End Time|Allowed Duration|Reset Cycle|Enable Duration Limit' ./package ./feeds 2>/dev/null | head -200 || true
+
       - name: Organize files
         if: inputs.build_firmware
         id: organize
