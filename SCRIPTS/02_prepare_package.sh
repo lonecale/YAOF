@@ -217,6 +217,13 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-theme-kucat=y" "$SEED_FI
     sed -i "s/currentCategory: 'basic'/currentCategory: 'allmenu'/" "$KUCAT_MENU"
 fi
 
+### WechatPush：补充新版 rpcd 的 /proc/net/arp 真实路径读取权限 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+    WECHATPUSH_ACL="./package/new/luci-app-wechatpush/root/usr/share/rpcd/acl.d/luci-app-wechatpush.json"
+    [ -f "${WECHATPUSH_ACL}.bak" ] || cp -af "$WECHATPUSH_ACL" "${WECHATPUSH_ACL}.bak"
+    grep -q '"/proc/\*/net/arp"' "$WECHATPUSH_ACL" || sed -i '/"\/proc\/net\/arp": \[ "read" \],/a\				"/proc/*/net/arp": [ "read" ],' "$WECHATPUSH_ACL"
+fi
+
 ### OpenClash 核心和规则预置 ###
 # 根据当前平台预置 OpenClash 核心和规则数据库
 # 只有当前平台 config.seed 选择 luci-app-openclash 时才执行
