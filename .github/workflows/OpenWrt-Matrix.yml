@@ -311,6 +311,15 @@ jobs:
           echo '================================================================'
           make -j1 V=s
 
+      - name: Check ttyd rc.d
+        if: inputs.build_firmware
+        working-directory: ${{ github.workspace }}/openwrt
+        run: |
+          echo "===== ttyd package ====="
+          grep -E '^CONFIG_PACKAGE_(ttyd|luci-app-ttyd)=' .config || true
+          echo "===== ttyd rootfs files ====="
+          find ./build_dir \( -path '*/root-*/etc/init.d/ttyd' -o -path '*/root-*/etc/config/ttyd' -o -path '*/root-*/etc/rc.d/*ttyd*' \) -print 2>/dev/null || true
+
       - name: Organize files
         if: inputs.build_firmware
         id: organize
