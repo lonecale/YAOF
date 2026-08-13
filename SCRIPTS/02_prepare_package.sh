@@ -227,9 +227,12 @@ fi
 ### ZeroTier：关闭状态不执行 zerotier-fw4 ###
 if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=y" "$SEED_FILE"; then
     ZEROTIER_INIT="./package/new/imm_pkg/zerotier/files/etc/init.d/zerotier"
-    [ -f "${ZEROTIER_INIT}.bak" ] || cp -af "$ZEROTIER_INIT" "${ZEROTIER_INIT}.bak"
 
-    sed -i '/^service_started() {$/,/^}$/c\
+    if [ -f "$ZEROTIER_INIT" ]; then
+        [ -f "${ZEROTIER_INIT}.bak" ] || cp -af "$ZEROTIER_INIT" "${ZEROTIER_INIT}.bak"
+
+        if grep -q '^service_started() {$' "$ZEROTIER_INIT"; then
+            sed -i '/^service_started() {$/,/^}$/c\
 service_started() {\
 \tlocal enabled\
 \tconfig_load zerotier\
@@ -237,6 +240,8 @@ service_started() {\
 \t[ "${enabled}" -eq 1 ] || return 0\
 \tzerotier-fw4 -s\
 }' "$ZEROTIER_INIT"
+        fi
+    fi
 fi
 
 ### OpenClash 核心和规则预置 ###
