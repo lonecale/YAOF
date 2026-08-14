@@ -165,6 +165,20 @@ cp -rf ../OpenWrt-Add ./package/new
 # CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus=y
 rm -rf ./package/new/trojan-plus
 
+### Default Settings：修正 UPnP 和 ttyd 默认状态 ###
+DEFAULT_SETTINGS="./package/new/addition-trans-zh/files/zzz-default-settings"
+
+if [ -f "$DEFAULT_SETTINGS" ]; then
+    [ -f "${DEFAULT_SETTINGS}.bak" ] || cp -af "$DEFAULT_SETTINGS" "${DEFAULT_SETTINGS}.bak"
+
+    # UPnP 默认保持关闭
+    sed -i "s/uci set upnpd.config.enabled='1'/uci set upnpd.config.enabled='0'/" "$DEFAULT_SETTINGS"
+
+    # ttyd 保持固件原本的自启动状态，不再首次启动时关闭
+    sed -i '/\/etc\/init.d\/ttyd disable 2>\/dev\/null/d' "$DEFAULT_SETTINGS"
+    sed -i '/\/etc\/init.d\/ttyd stop/d' "$DEFAULT_SETTINGS"
+fi
+
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
