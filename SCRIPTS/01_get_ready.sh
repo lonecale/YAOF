@@ -54,10 +54,12 @@ sirpdboy_kucat_config_repo="https://github.com/sirpdboy/luci-app-kucat-config"
 sirpdboy_netwizard_repo="https://github.com/sirpdboy/luci-app-netwizard"
 sirpdboy_netdata_repo="https://github.com/sirpdboy/luci-app-netdata"
 sirpdboy_advancedplus_repo="https://github.com/sirpdboy/luci-app-advancedplus"
-sirpdboy_timecontrol_repo="https://github.com/sirpdboy/luci-app-timecontrol"
 sirpdboy_lucky_repo="https://github.com/sirpdboy/luci-app-lucky"
 sirpdboy_netspeedtest_repo="https://github.com/sirpdboy/netspeedtest"
 sirpdboy_adguardhome_repo="https://github.com/sirpdboy/luci-app-adguardhome"
+sirpdboy_timecontrol_repo="https://github.com/sirpdboy/luci-app-timecontrol"
+kavass168_timecontrol_repo="https://github.com/kavass168/luci-app-timecontrol-25.12"
+
 sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
 sundaqiang_wolplus_repo="https://github.com/sundaqiang/openwrt-packages"
 
@@ -91,10 +93,11 @@ clone_repo $sirpdboy_kucat_config_repo master OpenWrt-Custom/luci-app-kucat-conf
 clone_repo $sirpdboy_netdata_repo main OpenWrt-Custom/luci-app-netdata &
 clone_repo $sirpdboy_netwizard_repo main OpenWrt-Custom/luci-app-netwizard &
 clone_repo $sirpdboy_advancedplus_repo main OpenWrt-Custom/luci-app-advancedplus &
-clone_repo $sirpdboy_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
 clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
 clone_repo $sirpdboy_adguardhome_repo main OpenWrt-Custom/luci-app-adguardhome &
+clone_repo $kavass168_timecontrol_repo main OpenWrt-Custom/luci-app-timecontrol &
+
 
 (
   clone_repo "$sundaqiang_wolplus_repo" master luci-app-wolplus &&
