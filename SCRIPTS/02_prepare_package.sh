@@ -243,8 +243,8 @@ if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)
     ZEROTIER_INIT="./package/new/imm_pkg/zerotier/files/etc/init.d/zerotier"
 
     if [ -f "$ZEROTIER_INIT" ]; then
-        [ -f "${ZEROTIER_INIT}.bak" ] || cp -af "$ZEROTIER_INIT" "${ZEROTIER_INIT}.bak"
-
+        ZEROTIER_INIT_BAK="./package/new/imm_pkg/zerotier/zerotier.init.bak"
+        [ -f "$ZEROTIER_INIT_BAK" ] || cp -af "$ZEROTIER_INIT" "$ZEROTIER_INIT_BAK"
         if grep -q '^service_started() {$' "$ZEROTIER_INIT"; then
             sed -i '/^service_started() {$/,/^}$/c\
 service_started() {\
