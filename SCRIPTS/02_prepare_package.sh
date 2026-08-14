@@ -196,10 +196,10 @@ fi
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
 
-rm -rf package/new/openwrt_pkgs/{luci-app-netdata,luci-app-netspeedtest}
+rm -rf package/new/openwrt_pkgs/{luci-app-netdata,luci-app-netspeedtest,luci-app-adguardhome}
 
-rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed,smartdns}
-rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier,luci-app-filemanager,luci-app-smartdns}
+rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed,smartdns,adguardhome}
+rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier,luci-app-filemanager,luci-app-smartdns,luci-app-adguardhome}
 rm -rf feeds/packages/utils/coremark
 sed -i 's/+@KERNEL_DEBUG_INFO_BTF/+vmlinux-btf/' ./package/new/openwrt-einat-ebpf/Makefile
 git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
@@ -209,9 +209,13 @@ git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
 rm -rf ./feeds/packages/net/q
 cp -rf ../immortalwrt_pkg_25/net/q ./feeds/packages/net/q
 
+### AdGuardHome ###
+# 使用 ImmortalWrt openwrt-25.12 的 AdGuardHome 核心和 LuCI
+cp -rf ../immortalwrt_pkg_25/net/adguardhome ./feeds/packages/net/adguardhome
+cp -rf ../immortalwrt_luci_25/applications/luci-app-adguardhome ./feeds/luci/applications/luci-app-adguardhome
+
 ### SmartDNS ###
 # 使用 ImmortalWrt openwrt-25.12 的 smartdns / luci-app-smartdns
-# 放回 feeds 原位置
 cp -rf ../immortalwrt_pkg_25/net/smartdns ./feeds/packages/net/smartdns
 cp -rf ../immortalwrt_luci_25/applications/luci-app-smartdns ./feeds/luci/applications/luci-app-smartdns
 # SmartDNS WebUI 编译依赖
