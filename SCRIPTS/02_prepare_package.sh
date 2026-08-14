@@ -211,8 +211,8 @@ cp -rf ../immortalwrt_pkg_25/net/q ./feeds/packages/net/q
 
 ### AdGuardHome ###
 # 使用 ImmortalWrt openwrt-25.12 的 AdGuardHome 核心和 LuCI
-# cp -rf ../immortalwrt_pkg_25/net/adguardhome ./feeds/packages/net/adguardhome
-# cp -rf ../immortalwrt_luci_25/applications/luci-app-adguardhome ./feeds/luci/applications/luci-app-adguardhome
+cp -rf ../immortalwrt_pkg_25/net/adguardhome ./feeds/packages/net/adguardhome
+cp -rf ../immortalwrt_luci_25/applications/luci-app-adguardhome ./feeds/luci/applications/luci-app-adguardhome
 
 ### SmartDNS ###
 # 使用 ImmortalWrt openwrt-25.12 的 smartdns / luci-app-smartdns
