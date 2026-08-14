@@ -179,6 +179,19 @@ if [ -f "$DEFAULT_SETTINGS" ]; then
     sed -i '/\/etc\/init.d\/ttyd stop/d' "$DEFAULT_SETTINGS"
 fi
 
+### UnblockNeteaseMusic：补回 Node.js 运行依赖 ###
+UNM_MAKEFILE="./package/new/luci-app-unblockneteasemusic/Makefile"
+UNM_INIT="./package/new/luci-app-unblockneteasemusic/root/etc/init.d/unblockneteasemusic"
+
+if [ -f "$UNM_MAKEFILE" ]; then
+    grep -q '+node' "$UNM_MAKEFILE" || sed -i 's/^LUCI_DEPENDS:=+dnsmasq-full \\/LUCI_DEPENDS:=+dnsmasq-full +node \\/' "$UNM_MAKEFILE"
+fi
+
+# OpenWrt 25.12 已使用 apk，删除旧版运行时调用 opkg 安装 node 的逻辑
+if [ -f "$UNM_INIT" ]; then
+    sed -i '/opkg update.*opkg install node/d' "$UNM_INIT"
+fi
+
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
