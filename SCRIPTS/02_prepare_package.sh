@@ -196,10 +196,10 @@ fi
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
 
-rm -rf package/new/openwrt_pkgs/{luci-app-netdata,luci-app-netspeedtest,luci-app-adguardhome}
+rm -rf package/new/openwrt_pkgs/{luci-app-netdata,luci-app-netspeedtest}
 
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed,smartdns}
-rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier,luci-app-filemanager,luci-app-smartdns,luci-app-adguardhome}
+rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier,luci-app-filemanager,luci-app-smartdns}
 rm -rf feeds/packages/utils/coremark
 sed -i 's/+@KERNEL_DEBUG_INFO_BTF/+vmlinux-btf/' ./package/new/openwrt-einat-ebpf/Makefile
 git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
