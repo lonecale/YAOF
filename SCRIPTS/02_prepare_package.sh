@@ -237,7 +237,8 @@ SEED_FILE="../SEED/${SEED_NAME}/config.seed"
 ### AdvancedPlus：默认关闭 ZSH 后台菜单 ###
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-advancedplus=y" "$SEED_FILE"; then
     ADVANCEDPLUS_CONFIG="./package/custom/luci-app-advancedplus/root/etc/config/advancedplus"
-    [ -f "${ADVANCEDPLUS_CONFIG}.bak" ] || cp -af "$ADVANCEDPLUS_CONFIG" "${ADVANCEDPLUS_CONFIG}.bak"
+    ADVANCEDPLUS_CONFIG_BAK="./package/custom/luci-app-advancedplus/advancedplus.bak"
+    [ -f "$ADVANCEDPLUS_CONFIG_BAK" ] || cp -af "$ADVANCEDPLUS_CONFIG" "$ADVANCEDPLUS_CONFIG_BAK"
     sed -i '/^[[:space:]]*option usshmenu/d' "$ADVANCEDPLUS_CONFIG"
     sed -i "/^config basic/a\\$(printf '\t')option usshmenu '1'" "$ADVANCEDPLUS_CONFIG"
 fi
@@ -245,21 +246,24 @@ fi
 ### KuCat Config：补充 kucat-config RPCD 执行权限 ###
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-kucat-config=y" "$SEED_FILE"; then
     KUCAT_ACL="./package/custom/luci-app-kucat-config/root/usr/share/rpcd/acl.d/luci-app-kucat-config.json"
-    [ -f "${KUCAT_ACL}.bak" ] || cp -af "$KUCAT_ACL" "${KUCAT_ACL}.bak"
+    KUCAT_ACL_BAK="./package/custom/luci-app-kucat-config/luci-app-kucat-config.json.bak"
+    [ -f "$KUCAT_ACL_BAK" ] || cp -af "$KUCAT_ACL" "$KUCAT_ACL_BAK"
     grep -q '"/usr/bin/kucat-config"' "$KUCAT_ACL" || sed -i 's#^\([[:space:]]*\)"/etc/init.d/kucat": \[ "exec" \],#\1"/etc/init.d/kucat": [ "exec" ],\n\1"/usr/bin/kucat-config": [ "exec" ],#' "$KUCAT_ACL"
 fi
 
 ### KuCat Theme：默认显示完整菜单 ###
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-theme-kucat=y" "$SEED_FILE"; then
     KUCAT_MENU="./package/custom/luci-theme-kucat/htdocs/luci-static/resources/menu-kucat.js"
-    [ -f "${KUCAT_MENU}.bak" ] || cp -af "$KUCAT_MENU" "${KUCAT_MENU}.bak"
+    KUCAT_MENU_BAK="./package/custom/luci-theme-kucat/menu-kucat.js.bak"
+    [ -f "$KUCAT_MENU_BAK" ] || cp -af "$KUCAT_MENU" "$KUCAT_MENU_BAK"
     sed -i "s/currentCategory: 'basic'/currentCategory: 'allmenu'/" "$KUCAT_MENU"
 fi
 
 ### WechatPush：补充新版 rpcd 的 /proc/net/arp 真实路径读取权限 ###
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
     WECHATPUSH_ACL="./package/new/luci-app-wechatpush/root/usr/share/rpcd/acl.d/luci-app-wechatpush.json"
-    [ -f "${WECHATPUSH_ACL}.bak" ] || cp -af "$WECHATPUSH_ACL" "${WECHATPUSH_ACL}.bak"
+    WECHATPUSH_ACL_BAK="./package/new/luci-app-wechatpush/luci-app-wechatpush.json.bak"
+    [ -f "$WECHATPUSH_ACL_BAK" ] || cp -af "$WECHATPUSH_ACL" "$WECHATPUSH_ACL_BAK"
     grep -q '"/proc/\*/net/arp"' "$WECHATPUSH_ACL" || sed -i '/"\/proc\/net\/arp": \[ "read" \],/a\				"/proc/*/net/arp": [ "read" ],' "$WECHATPUSH_ACL"
 fi
 
@@ -270,6 +274,7 @@ if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)
     if [ -f "$ZEROTIER_INIT" ]; then
         ZEROTIER_INIT_BAK="./package/new/imm_pkg/zerotier/zerotier.init.bak"
         [ -f "$ZEROTIER_INIT_BAK" ] || cp -af "$ZEROTIER_INIT" "$ZEROTIER_INIT_BAK"
+
         if grep -q '^service_started() {$' "$ZEROTIER_INIT"; then
             sed -i '/^service_started() {$/,/^}$/c\
 service_started() {\
