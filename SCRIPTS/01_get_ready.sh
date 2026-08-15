@@ -63,6 +63,7 @@ kavass168_timecontrol_repo="https://github.com/kavass168/luci-app-timecontrol-25
 
 sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
 sundaqiang_wolplus_repo="https://github.com/sundaqiang/openwrt-packages"
+agogo233_wolplus_repo="https://github.com/agogo233/luci-app-wolplus"
 
 # 开始克隆仓库，并行执行
 clone_repo $openwrt_repo $latest_release openwrt &
@@ -98,11 +99,16 @@ clone_repo $sirpdboy_lucky_repo main OpenWrt-Custom/luci-app-lucky &
 clone_repo $sirpdboy_netspeedtest_repo main OpenWrt-Custom/netspeedtest &
 clone_repo $stevenjoezhang_adguardhome_repo dev OpenWrt-Custom/luci-app-adguardhome &
 
-(
-  clone_repo "$sundaqiang_wolplus_repo" master luci-app-wolplus &&
-  mv luci-app-wolplus/luci-app-wolplus OpenWrt-Custom/
-  rm -rf luci-app-wolplus
-) &
+# WOLPlus：旧版 sundaqiang 暂时停用，保留备用
+# (
+#   clone_repo "$sundaqiang_wolplus_repo" master luci-app-wolplus &&
+#   mv luci-app-wolplus/luci-app-wolplus OpenWrt-Custom/
+#   rm -rf luci-app-wolplus
+# ) &
+
+# WOLPlus：使用 agogo233 版本
+clone_repo $agogo233_wolplus_repo main OpenWrt-Custom/luci-app-wolplus &
+
 
 # sbwml 系列自定义包
 clone_repo $sbw_quickfile_repo main OpenWrt-Custom/luci-app-quickfile &
