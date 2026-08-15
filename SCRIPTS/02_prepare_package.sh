@@ -167,9 +167,10 @@ rm -rf ./package/new/trojan-plus
 
 ### Default Settings：修正 UPnP 和 ttyd 默认状态 ###
 DEFAULT_SETTINGS="./package/new/addition-trans-zh/files/zzz-default-settings"
+DEFAULT_SETTINGS_BAK="./package/new/addition-trans-zh/zzz-default-settings.bak"
 
 if [ -f "$DEFAULT_SETTINGS" ]; then
-    [ -f "${DEFAULT_SETTINGS}.bak" ] || cp -af "$DEFAULT_SETTINGS" "${DEFAULT_SETTINGS}.bak"
+    [ -f "$DEFAULT_SETTINGS_BAK" ] || cp -af "$DEFAULT_SETTINGS" "$DEFAULT_SETTINGS_BAK"
 
     # UPnP 默认保持关闭
     sed -i "s/uci set upnpd.config.enabled='1'/uci set upnpd.config.enabled='0'/" "$DEFAULT_SETTINGS"
@@ -177,6 +178,13 @@ if [ -f "$DEFAULT_SETTINGS" ]; then
     # ttyd 保持固件原本的自启动状态，不再首次启动时关闭
     sed -i '/\/etc\/init.d\/ttyd disable 2>\/dev\/null/d' "$DEFAULT_SETTINGS"
     sed -i '/\/etc\/init.d\/ttyd stop/d' "$DEFAULT_SETTINGS"
+fi
+
+### ttyd：LAN 接口重新配置后自动重启 ###
+TTYD_INIT="./feeds/packages/utils/ttyd/files/ttyd.init"
+
+if [ -f "$TTYD_INIT" ] && ! grep -Fq 'procd_add_interface_trigger "interface.*" "lan" /etc/init.d/$NAME restart' "$TTYD_INIT"; then
+    sed -i $'/procd_add_reload_trigger "$NAME"/a\\\n\tprocd_add_interface_trigger "interface.*" "lan" /etc/init.d/$NAME restart' "$TTYD_INIT"
 fi
 
 ### UnblockNeteaseMusic：补回 Node.js 运行依赖 ###
