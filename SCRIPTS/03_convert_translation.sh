@@ -5,10 +5,23 @@
 # Convert translation files zh-cn to zh_Hans
 # The script is still in testing, welcome to report bugs.
 
+# 已存在 zh_Hans 时优先保留，避免旧 zh-cn 覆盖
+find . -type d -path "*/po/zh-cn" | while read -r old_dir; do
+  new_dir="$(dirname "$old_dir")/zh_Hans"
+  [ -d "$new_dir" ] && rm -rf "$old_dir"
+done
+
 po_file="$({ find -type f | grep -E "[a-z0-9]+\.zh\-cn.+po"; } 2>"/dev/null")"
 for a in ${po_file}; do
-  [ -n "$(grep "Language: zh_CN" "$a")" ] && sed -i "s/Language: zh_CN/Language: zh_Hans/g" "$a"
   po_new_file="$(echo -e "$a" | sed "s/zh-cn/zh_Hans/g")"
+
+  # 已存在对应 zh_Hans 文件时优先保留
+  if [ -f "$po_new_file" ]; then
+    rm -f "$a"
+    continue
+  fi
+
+  [ -n "$(grep "Language: zh_CN" "$a")" ] && sed -i "s/Language: zh_CN/Language: zh_Hans/g" "$a"
   mv "$a" "${po_new_file}" 2>"/dev/null"
 done
 
