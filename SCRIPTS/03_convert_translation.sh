@@ -5,11 +5,36 @@
 # Convert translation files zh-cn to zh_Hans
 # The script is still in testing, welcome to report bugs.
 
-# 已存在 zh_Hans 时优先保留，避免旧 zh-cn 覆盖
+
+### 1. 处理 po/zh-cn 与 po/zh_Hans 共存情况 ###
+
 find . -type d -path "*/po/zh-cn" | while read -r old_dir; do
   new_dir="$(dirname "$old_dir")/zh_Hans"
-  [ -d "$new_dir" ] && rm -rf "$old_dir"
+
+  # zh_Hans 是符号链接
+  if [ -L "$new_dir" ]; then
+    link_target="$(readlink "$new_dir")"
+
+    # 兼容：
+    # zh_Hans -> zh-cn
+    # zh_Hans -> ./zh-cn
+    if [ "$link_target" = "zh-cn" ] || [ "$link_target" = "./zh-cn" ]; then
+      rm -f "$new_dir"
+      mv "$old_dir" "$new_dir"
+      continue
+    fi
+
+    # 其他未知符号链接保持原样
+    continue
+  fi
+
+  # zh_Hans 已经是真实目录时优先保留
+  if [ -d "$new_dir" ]; then
+    rm -rf "$old_dir"
+  fi
 done
+
+
 
 po_file="$({ find -type f | grep -E "[a-z0-9]+\.zh\-cn.+po"; } 2>"/dev/null")"
 for a in ${po_file}; do
@@ -47,6 +72,12 @@ done
 po_dir="$({ find -type d | grep "/zh-cn" | sed "/\.po/d" | sed "/\.lmo/d"; } 2>"/dev/null")"
 for e in ${po_dir}; do
   po_new_dir="$(echo -e "$e" | sed "s/zh-cn/zh_Hans/g")"
+
+  # 已存在对应 zh_Hans 目录或链接时不覆盖
+  if [ -e "$po_new_dir" ] || [ -L "$po_new_dir" ]; then
+    continue
+  fi
+
   mv "$e" "${po_new_dir}" 2>"/dev/null"
 done
 
