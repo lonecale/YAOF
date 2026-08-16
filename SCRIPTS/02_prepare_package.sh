@@ -430,6 +430,24 @@ else
     echo "luci-app-wechatpush is not selected in ${SEED_FILE}, skip WeChatPush logo"
 fi
 
+### procps-ng top 默认配置预置 ###
+
+TOP_DEFAULT_RC="package/base-files/files/etc/topdefaultrc"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_procps-ng-top=y" "$SEED_FILE"; then
+    echo "procps-ng-top is selected in ${SEED_FILE}"
+
+    if [ -d "$(dirname "$TOP_DEFAULT_RC")" ]; then
+        curl --retry 3 --connect-timeout 15 -fL -o "$TOP_DEFAULT_RC" \
+            "https://raw.githubusercontent.com/lonecale/Groceries/main/Diy/toprc" \
+            || echo "procps-ng top default config download failed, skip"
+    else
+        echo "top default config directory not found: $(dirname "$TOP_DEFAULT_RC")"
+    fi
+else
+    echo "procps-ng-top is not selected in ${SEED_FILE}, skip top default config"
+fi
+
 ### 获取额外的 LuCI 应用、主题和依赖 ###
 # RK
 sed -i '/REQUIRE_IMAGE_METADATA/d' target/linux/rockchip/armv8/base-files/lib/upgrade/platform.sh
