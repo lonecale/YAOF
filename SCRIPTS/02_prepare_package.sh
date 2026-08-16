@@ -285,14 +285,15 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED
 fi
 
 
-### ZeroTier：关闭状态不执行 zerotier-fw4 ###
+### ZeroTier：关闭状态不执行 zerotier-fw4，并补齐 peers.d 目录 ###
 if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=y" "$SEED_FILE"; then
     ZEROTIER_INIT="./package/new/imm_pkg/zerotier/files/etc/init.d/zerotier"
+    ZEROTIER_INIT_BAK="./package/new/imm_pkg/zerotier/zerotier.init.bak"
 
     if [ -f "$ZEROTIER_INIT" ]; then
-        ZEROTIER_INIT_BAK="./package/new/imm_pkg/zerotier/zerotier.init.bak"
         [ -f "$ZEROTIER_INIT_BAK" ] || cp -af "$ZEROTIER_INIT" "$ZEROTIER_INIT_BAK"
 
+        ### 1. 关闭状态不执行 zerotier-fw4 ###
         if grep -q '^service_started() {$' "$ZEROTIER_INIT"; then
             sed -i '/^service_started() {$/,/^}$/c\
 service_started() {\
@@ -302,6 +303,11 @@ service_started() {\
 \t[ "${enabled}" -eq 1 ] || return 0\
 \tzerotier-fw4 -s\
 }' "$ZEROTIER_INIT"
+        fi
+
+        ### 2. 创建 ZeroTier peers.d 目录 ###
+        if grep -q '^[[:space:]]*mkdir -p "${CONFIG_PATH}"/networks.d$' "$ZEROTIER_INIT"; then
+            sed -i 's#^\([[:space:]]*\)mkdir -p "${CONFIG_PATH}"/networks.d$#\1mkdir -p "${CONFIG_PATH}"/networks.d "${CONFIG_PATH}"/peers.d#' "$ZEROTIER_INIT"
         fi
     fi
 fi
