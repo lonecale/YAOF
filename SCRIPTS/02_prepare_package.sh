@@ -267,6 +267,24 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED
     grep -q '"/proc/\*/net/arp"' "$WECHATPUSH_ACL" || sed -i '/"\/proc\/net\/arp": \[ "read" \],/a\				"/proc/*/net/arp": [ "read" ],' "$WECHATPUSH_ACL"
 fi
 
+### WechatPush：修复温度测试失败后进入主循环 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+    WECHATPUSH_SCRIPT="./package/new/luci-app-wechatpush/root/usr/share/wechatpush/wechatpush"
+    WECHATPUSH_SCRIPT_BAK="./package/new/luci-app-wechatpush/wechatpush.bak"
+
+    if [ -f "$WECHATPUSH_SCRIPT" ]; then
+        [ -f "$WECHATPUSH_SCRIPT_BAK" ] || cp -af "$WECHATPUSH_SCRIPT" "$WECHATPUSH_SCRIPT_BAK"
+
+        if grep -Eq '^[[:space:]]*soc_temp[[:space:]]*&&[[:space:]]*exit[[:space:]]+\$\?[[:space:]]*$' "$WECHATPUSH_SCRIPT"; then
+            sed -Ei 's/^([[:space:]]*)soc_temp[[:space:]]*&&[[:space:]]*exit[[:space:]]+\$\?[[:space:]]*$/\1soc_temp; exit $?/' "$WECHATPUSH_SCRIPT"
+            echo "WechatPush soc loop bug fixed"
+        else
+            echo "WechatPush soc loop bug not found, skip"
+        fi
+    fi
+fi
+
+
 ### ZeroTier：关闭状态不执行 zerotier-fw4 ###
 if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=y" "$SEED_FILE"; then
     ZEROTIER_INIT="./package/new/imm_pkg/zerotier/files/etc/init.d/zerotier"
