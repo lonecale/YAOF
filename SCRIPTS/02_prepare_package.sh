@@ -243,6 +243,18 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-advancedplus=y" "$SE
     sed -i "/^config basic/a\\$(printf '\t')option usshmenu '1'" "$ADVANCEDPLUS_CONFIG"
 fi
 
+### TaskPlan：保存配置后自动刷新定时任务 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-taskplan=y" "$SEED_FILE"; then
+    TASKPLAN_UCITRACK="./package/new/luci-app-taskplan/luci-app-taskplan/root/usr/share/ucitrack/luci-app-taskplan.json"
+    mkdir -p "$(dirname "$TASKPLAN_UCITRACK")"
+    cat > "$TASKPLAN_UCITRACK" <<'EOF'
+{
+	"config": "taskplan",
+	"exec": "/etc/init.d/taskplan start"
+}
+EOF
+fi
+
 ### KuCat Config：补充 kucat-config RPCD 执行权限 ###
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-kucat-config=y" "$SEED_FILE"; then
     KUCAT_ACL="./package/custom/luci-app-kucat-config/root/usr/share/rpcd/acl.d/luci-app-kucat-config.json"
