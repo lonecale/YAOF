@@ -343,6 +343,669 @@ jobs:
           zip ${{ env.artifact_prefix }}-$(date +%Y-%m-%d)-${{ env.latest_release }}-sfs.zip ${{ env.sfs_zip }}
           ls -Ahl
 
+      - name: Archive recovery packages
+        if: inputs.build_firmware
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+    
+          RECOVERY_DIR="${GITHUB_WORKSPACE}/package-recovery"
+          PACKAGE_DIR="${RECOVERY_DIR}/packages"
+          TARGET_DIR="${GITHUB_WORKSPACE}/openwrt/bin/targets/${{ matrix.arch }}"
+          PACKAGEINFO="${GITHUB_WORKSPACE}/openwrt/tmp/.packageinfo"
+          SEED_FILE="${GITHUB_WORKSPACE}/SEED/${{ env.seed }}/config.seed"
+    
+          rm -rf "${RECOVERY_DIR}"
+          mkdir -p "${PACKAGE_DIR}"
+    
+          echo "===== Recovery package archive ====="
+          echo "Target: ${{ matrix.name }}"
+    
+          # 找本次固件 manifest
+          MANIFEST="$(
+            find "${TARGET_DIR}" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.manifest' \
+              | sort \
+              | head -n 1
+          )"
+    
+          if [ -z "${MANIFEST}" ]; then
+            echo "ERROR: firmware manifest not found"
+            exit 1
+          fi
+    
+          if [ ! -f "${PACKAGEINFO}" ]; then
+            echo "ERROR: tmp/.packageinfo not found"
+            exit 1
+          fi
+    
+          if [ ! -f "${SEED_FILE}" ]; then
+            echo "ERROR: config.seed not found: ${SEED_FILE}"
+            exit 1
+          fi
+    
+          echo "Seed:     ${SEED_FILE}"
+          echo "Manifest: ${MANIFEST}"
+    
+          cp "${MANIFEST}" \
+            "${RECOVERY_DIR}/firmware.manifest"
+    
+          cp "${GITHUB_WORKSPACE}/openwrt/.config" \
+            "${RECOVERY_DIR}/openwrt.config"
+    
+          python3 - \
+            "${SEED_FILE}" \
+            "${MANIFEST}" \
+            "${PACKAGEINFO}" \
+            "${PACKAGE_DIR}" \
+            "${GITHUB_WORKSPACE}/openwrt/bin/packages" \
+            "${TARGET_DIR}/packages" \
+            "${RECOVERY_DIR}" <<'PY'
+          import sys
+          import re
+          import shutil
+          import hashlib
+          from pathlib import Path
+    
+          seed_file = Path(sys.argv[1])
+          manifest_file = Path(sys.argv[2])
+          packageinfo_file = Path(sys.argv[3])
+          package_dir = Path(sys.argv[4])
+          search_roots = [
+              Path(sys.argv[5]),
+              Path(sys.argv[6]),
+          ]
+          recovery_dir = Path(sys.argv[7])
+    
+          # ==================================================
+          # 1. firmware.manifest
+          #    本次固件实际安装的包 + 精确版本
+          # ==================================================
+    
+          installed = {}
+    
+          for line in manifest_file.read_text(
+              encoding="utf-8",
+              errors="ignore"
+          ).splitlines():
+    
+              line = line.strip()
+    
+              if " - " not in line:
+                  continue
+    
+              name, version = line.rsplit(" - ", 1)
+    
+              name = name.strip()
+              version = version.strip()
+    
+              if name and version:
+                  installed[name] = version
+    
+          # ==================================================
+          # 2. config.seed
+          #    读取 ### APPLICATION ### 块
+          # ==================================================
+    
+          application = set()
+          in_application = False
+    
+          for line in seed_file.read_text(
+              encoding="utf-8",
+              errors="ignore"
+          ).splitlines():
+    
+              line = line.strip()
+    
+              if line == "### APPLICATION ###":
+                  in_application = True
+                  continue
+    
+              if (
+                  in_application
+                  and line.startswith("### ")
+                  and line.endswith(" ###")
+              ):
+                  break
+    
+              if not in_application:
+                  continue
+    
+              match = re.match(
+                  r"^CONFIG_PACKAGE_(.+)=y$",
+                  line
+              )
+    
+              if match:
+                  application.add(match.group(1))
+    
+          # ==================================================
+          # 3. 解析 tmp/.packageinfo
+          #
+          # 一个 Source-Makefile 可以包含多个 Package
+          # 所以必须逐行解析，不能按空行简单切分
+          # ==================================================
+    
+          package_meta = {}
+    
+          source_makefile = ""
+          current_package = None
+    
+          for raw_line in packageinfo_file.read_text(
+              encoding="utf-8",
+              errors="ignore"
+          ).splitlines():
+    
+              line = raw_line.strip()
+    
+              if line.startswith("Source-Makefile:"):
+    
+                  source_makefile = line.split(
+                      ":",
+                      1
+                  )[1].strip()
+    
+                  current_package = None
+    
+                  continue
+    
+              if line.startswith("Package:"):
+    
+                  current_package = line.split(
+                      ":",
+                      1
+                  )[1].strip()
+    
+                  package_meta[current_package] = {
+                      "source": source_makefile,
+                      "depends": "",
+                      "abi": "",
+                  }
+    
+                  continue
+    
+              if current_package is None:
+                  continue
+    
+              if line.startswith("Depends:"):
+    
+                  package_meta[current_package]["depends"] = (
+                      line.split(
+                          ":",
+                          1
+                      )[1].strip()
+                  )
+    
+              elif line.startswith("ABI-Version:"):
+    
+                  package_meta[current_package]["abi"] = (
+                      line.split(
+                          ":",
+                          1
+                      )[1].strip()
+                  )
+    
+          # ==================================================
+          # 4. package/new 和 package/custom
+          # ==================================================
+    
+          def is_custom_source(source):
+    
+              return (
+                  source.startswith("package/new/")
+                  or
+                  source.startswith("package/custom/")
+              )
+    
+          # ==================================================
+          # 5. 处理 ABI-Version
+          #
+          # packageinfo 使用基础包名
+          # manifest 使用最终实际包名
+          # ==================================================
+    
+          def actual_package_name(name):
+    
+              if name in installed:
+                  return name
+    
+              meta = package_meta.get(name)
+    
+              if not meta:
+                  return None
+    
+              abi = meta.get("abi", "")
+    
+              if not abi:
+                  return None
+    
+              # OpenWrt kmod 不使用普通 ABI suffix
+              if name.startswith("kmod-"):
+                  return None
+    
+              if name[-1:].isdigit():
+                  candidate = (
+                      f"{name}-{abi}"
+                  )
+              else:
+                  candidate = (
+                      f"{name}{abi}"
+                  )
+    
+              if candidate in installed:
+                  return candidate
+    
+              return None
+    
+          # ==================================================
+          # 6. 初始恢复范围
+          #
+          # APPLICATION
+          # +
+          # package/new
+          # +
+          # package/custom
+          # ==================================================
+    
+          selected = set(application)
+    
+          for name, meta in package_meta.items():
+    
+              if is_custom_source(
+                  meta["source"]
+              ):
+                  selected.add(name)
+    
+          # ==================================================
+          # 7. 分析依赖
+          # ==================================================
+    
+          def parse_dependencies(depends):
+    
+              result = set()
+    
+              for match in re.finditer(
+                  r"\+([^\s,]+)",
+                  depends
+              ):
+    
+                  dep = match.group(1)
+    
+                  # 例如：
+                  # +PACKAGE_xxx:package-name
+                  # +(COND):package-name
+                  if ":" in dep:
+                      dep = dep.rsplit(
+                          ":",
+                          1
+                      )[1]
+    
+                  dep = dep.strip("()")
+                  dep = dep.lstrip("!")
+    
+                  if (
+                      not dep
+                      or dep.startswith("@")
+                  ):
+                      continue
+    
+                  result.add(dep)
+    
+              return result
+    
+          # ==================================================
+          # 8. 递归补依赖
+          #
+          # 自动补：
+          # package/new
+          # package/custom
+          # kmod-*
+          #
+          # 不递归收 libc/base-files 等系统核心包
+          # ==================================================
+    
+          changed = True
+    
+          while changed:
+    
+              changed = False
+    
+              for name in list(selected):
+    
+                  meta = package_meta.get(name)
+    
+                  if not meta:
+                      continue
+    
+                  for dep in parse_dependencies(
+                      meta["depends"]
+                  ):
+    
+                      # 依赖必须真实存在于本次固件
+                      if actual_package_name(dep) is None:
+                          continue
+    
+                      dep_meta = package_meta.get(
+                          dep,
+                          {}
+                      )
+    
+                      dep_source = dep_meta.get(
+                          "source",
+                          ""
+                      )
+    
+                      if (
+                          dep.startswith("kmod-")
+                          or
+                          is_custom_source(dep_source)
+                      ):
+    
+                          if dep not in selected:
+    
+                              selected.add(dep)
+                              changed = True
+    
+          # ==================================================
+          # 9. 转换成 manifest 中的实际包名
+          # ==================================================
+    
+          selected_actual = set()
+    
+          for name in selected:
+    
+              actual = actual_package_name(name)
+    
+              if actual:
+                  selected_actual.add(actual)
+    
+          # ==================================================
+          # 10. 自动加入 LuCI 语言包
+          #
+          # luci-app-oaf
+          # ->
+          # luci-i18n-oaf-zh-cn
+          # ==================================================
+    
+          for name in list(selected):
+    
+              if not name.startswith("luci-app-"):
+                  continue
+    
+              app_name = name[len("luci-app-"):]
+    
+              prefix = (
+                  f"luci-i18n-{app_name}-"
+              )
+    
+              for installed_name in installed:
+    
+                  if installed_name.startswith(prefix):
+                      selected_actual.add(
+                          installed_name
+                      )
+    
+          selected_actual = sorted(
+              selected_actual
+          )
+    
+          # ==================================================
+          # 11. 保存选择结果
+          # ==================================================
+    
+          (
+              recovery_dir /
+              "application-selected.txt"
+          ).write_text(
+              "\n".join(
+                  sorted(application)
+              ) + "\n",
+              encoding="utf-8"
+          )
+    
+          (
+              recovery_dir /
+              "selected-packages.txt"
+          ).write_text(
+              "\n".join(
+                  f"{name} - {installed[name]}"
+                  for name in selected_actual
+              ) + "\n",
+              encoding="utf-8"
+          )
+    
+          print()
+          print("===== Selected packages =====")
+    
+          for name in selected_actual:
+    
+              print(
+                  f"{name} - "
+                  f"{installed[name]}"
+              )
+    
+          print()
+          print(
+              f"Selected count: "
+              f"{len(selected_actual)}"
+          )
+    
+          # ==================================================
+          # 12. 建立实际 APK 索引
+          # ==================================================
+    
+          apk_index = {}
+    
+          for root in search_roots:
+    
+              if not root.exists():
+                  continue
+    
+              for apk in root.rglob("*.apk"):
+    
+                  apk_index.setdefault(
+                      apk.name,
+                      []
+                  ).append(apk)
+    
+          # ==================================================
+          # 13. 按 manifest 精确版本寻找 APK
+          #
+          # OpenWrt APK：
+          # actual-package-name-version.apk
+          # ==================================================
+    
+          saved = []
+          missing = []
+    
+          for name in selected_actual:
+    
+              version = installed[name]
+    
+              apk_name = (
+                  f"{name}-"
+                  f"{version}.apk"
+              )
+    
+              matches = apk_index.get(
+                  apk_name,
+                  []
+              )
+    
+              if not matches:
+    
+                  missing.append(
+                      f"{name} - {version}"
+                  )
+    
+                  print(
+                      f"MISS: {apk_name}"
+                  )
+    
+                  continue
+    
+              # 如果不同目录存在同名 APK，
+              # 内容完全一样则直接使用
+              if len(matches) > 1:
+    
+                  digests = {}
+    
+                  for path in matches:
+    
+                      digest = hashlib.sha256(
+                          path.read_bytes()
+                      ).hexdigest()
+    
+                      digests.setdefault(
+                          digest,
+                          []
+                      ).append(path)
+    
+                  if len(digests) > 1:
+    
+                      missing.append(
+                          f"{name} - "
+                          f"{version} "
+                          f"(ambiguous)"
+                      )
+    
+                      print(
+                          f"AMBIGUOUS: "
+                          f"{apk_name}"
+                      )
+    
+                      continue
+    
+              source = matches[0]
+    
+              target = (
+                  package_dir /
+                  source.name
+              )
+    
+              shutil.copy2(
+                  source,
+                  target
+              )
+    
+              saved.append(target)
+    
+              print(
+                  f"SAVE: "
+                  f"{source.name}"
+              )
+    
+          # ==================================================
+          # 14. 缺失列表
+          # ==================================================
+    
+          (
+              recovery_dir /
+              "missing-packages.txt"
+          ).write_text(
+              (
+                  "\n".join(missing) + "\n"
+                  if missing
+                  else "None\n"
+              ),
+              encoding="utf-8"
+          )
+    
+          # ==================================================
+          # 15. SHA256
+          # ==================================================
+    
+          sha_lines = []
+    
+          for path in sorted(saved):
+    
+              digest = hashlib.sha256(
+                  path.read_bytes()
+              ).hexdigest()
+    
+              sha_lines.append(
+                  f"{digest}  "
+                  f"{path.name}"
+              )
+    
+          (
+              recovery_dir /
+              "SHA256SUMS"
+          ).write_text(
+              (
+                  "\n".join(sha_lines) + "\n"
+                  if sha_lines
+                  else "No APK files saved\n"
+              ),
+              encoding="utf-8"
+          )
+    
+          print()
+          print(
+              f"Saved APK count: "
+              f"{len(saved)}"
+          )
+    
+          print(
+              f"Missing APK count: "
+              f"{len(missing)}"
+          )
+
+          if missing:
+              print()
+              print("WARNING: Some recovery APKs were not found.")
+              print("Firmware build will continue normally.")
+              print("See missing-packages.txt for details.")
+    
+          PY
+    
+          # 保存编译来源信息
+          OPENWRT_COMMIT="$(
+            git -C "${GITHUB_WORKSPACE}/openwrt" \
+              rev-parse HEAD \
+              2>/dev/null \
+              || echo unknown
+          )"
+    
+          {
+            echo "YAOF_COMMIT=${GITHUB_SHA}"
+            echo "OPENWRT_COMMIT=${OPENWRT_COMMIT}"
+            echo "TARGET=${{ matrix.name }}"
+            echo "TARGET_ARCH=${{ matrix.arch }}"
+            echo "OPENWRT_VERSION=${{ env.latest_release }}"
+            echo "GITHUB_RUN_ID=${GITHUB_RUN_ID}"
+            echo "BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          } > "${RECOVERY_DIR}/BUILD-INFO.txt"
+    
+          # 打成单独恢复包
+          RECOVERY_ZIP="${GITHUB_WORKSPACE}/artifact/${{ env.artifact_prefix }}-$(date +%Y-%m-%d)-${{ env.latest_release }}-packages.zip"
+    
+          (
+            cd "${RECOVERY_DIR}"
+    
+            zip -qr \
+              "${RECOVERY_ZIP}" \
+              .
+          )
+    
+          echo
+          echo "===== Recovery package created ====="
+    
+          ls -lh "${RECOVERY_ZIP}"
+    
+          echo
+          echo "===== Recovery APK list ====="
+    
+          find "${PACKAGE_DIR}" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.apk' \
+            -printf '%f\n' \
+            | sort
+
       - name: Create release
         if: inputs.build_firmware
         id: create_release
