@@ -200,6 +200,200 @@ if [ -f "$UNM_INIT" ]; then
     sed -i '/opkg update.*opkg install node/d' "$UNM_INIT"
 fi
 
+# MosDNS：
+# 1. query log 只在 Debug 级别输出
+# 2. Info 级别保留精简但信息较完整的 query_summary
+# 3. 仅识别到当前已知的上游 Query Log 实现时才应用
+# 4. 如果以后上游修改 Query Log、增加 query_summary，
+#    或新增后续 patch 修改 entry_handler.go，则自动跳过
+
+MOSDNS_PATCH_DIR="./package/new/luci-app-mosdns/mosdns/patches"
+MOSDNS_QUERY_PATCH="${MOSDNS_PATCH_DIR}/211-feat-add-query-log-support.patch"
+MOSDNS_LOCAL_PATCH="${MOSDNS_PATCH_DIR}/999-local-query-log-level.patch"
+
+MOSDNS_CAN_PATCH=1
+
+# 防止来源目录以后残留旧的本地补丁
+rm -f "${MOSDNS_LOCAL_PATCH}"
+
+# 211 不存在，说明上游结构已经发生变化
+if [ ! -f "${MOSDNS_QUERY_PATCH}" ]; then
+	echo "MosDNS: upstream 211 query log patch not found, skip local query log fix"
+	MOSDNS_CAN_PATCH=0
+fi
+
+# 如果上游已经自行加入 query_summary，则完全退出本地修改
+if [ "${MOSDNS_CAN_PATCH}" = "1" ] && \
+	grep -Rqs 'query_summary' "${MOSDNS_PATCH_DIR}"; then
+	echo "MosDNS: upstream already contains query_summary, skip local query log fix"
+	MOSDNS_CAN_PATCH=0
+fi
+
+# 如果 211 之后已有其他上游 patch 修改 entry_handler.go，
+# 保守退出，避免覆盖上游后续实现或修复
+if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
+	for p in "${MOSDNS_PATCH_DIR}"/*.patch; do
+		[ -e "${p}" ] || continue
+
+		base="$(basename "${p}")"
+		[ "${base}" = "$(basename "${MOSDNS_QUERY_PATCH}")" ] && continue
+		[ "${base}" = "$(basename "${MOSDNS_LOCAL_PATCH}")" ] && continue
+
+		num="${base%%-*}"
+
+		case "${num}" in
+			''|*[!0-9]*)
+				continue
+				;;
+		esac
+
+		[ "${num}" -le 211 ] && continue
+
+		if grep -q 'pkg/server_handler/entry_handler.go' "${p}"; then
+			echo "MosDNS: later upstream patch ${base} modifies entry_handler.go, skip local query log fix"
+			MOSDNS_CAN_PATCH=0
+			break
+		fi
+	done
+fi
+
+# 精确确认当前已知的上游 Query Log 代码仍然存在
+if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
+	if MOSDNS_QUERY_PATCH="${MOSDNS_QUERY_PATCH}" python3 - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+p = Path(os.environ["MOSDNS_QUERY_PATCH"])
+text = p.read_text(encoding="utf-8")
+
+old_block = '''+\tif mlog.IsDebug() {
++\t\th.opts.Logger.Debug("query log", zap.Inline(qCtx))
++\t} else {
++\t\th.opts.Logger.Info("query log", zap.Inline(qCtx))
++\t}
+'''
+
+required = (
+    "CacheState",
+    "UpstreamSelected",
+    "Protocol   string",
+)
+
+ok = old_block in text and all(s in text for s in required)
+
+sys.exit(0 if ok else 1)
+PY
+	then
+		echo "MosDNS: detected known upstream full query log at Info level"
+	else
+		echo "MosDNS: upstream query log implementation changed/fixed, skip local query log fix"
+		MOSDNS_CAN_PATCH=0
+	fi
+fi
+
+# 只有完整通过所有检查后才生成本地补丁
+if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
+
+	cat > "${MOSDNS_LOCAL_PATCH}" <<'EOF'
+--- a/pkg/server_handler/entry_handler.go
++++ b/pkg/server_handler/entry_handler.go
+@@ -131,10 +131,82 @@
+ 		h.opts.Logger.Error("internal err: failed to pack resp msg", qCtx.InfoField(), zap.Error(err))
+ 		return nil
+ 	}
+-	if mlog.IsDebug() {
+-		h.opts.Logger.Debug("query log", zap.Inline(qCtx))
+-	} else {
+-		h.opts.Logger.Info("query log", zap.Inline(qCtx))
++	h.opts.Logger.Debug("query log", zap.Inline(qCtx))
++
++	question := qCtx.QQuestion()
++	proto := serverMeta.Protocol
++	if proto == "" {
++		if serverMeta.FromUDP {
++			proto = "UDP"
++		} else {
++			proto = "TCP"
++		}
+ 	}
++
++	fields := []zap.Field{
++		zap.Uint32("uqid", qCtx.Id()),
++		zap.String("qname", question.Name),
++		zap.String("qtype", dns.TypeToString[question.Qtype]),
++		zap.Uint16("qclass", question.Qclass),
++		zap.String("protocol", proto),
++		zap.Bool("cache_hit", qCtx.CacheState.Hit),
++		zap.Bool("cache_lazy_hit", qCtx.CacheState.LazyHit),
++		zap.Int("cache_ttl", qCtx.CacheState.TTL),
++		zap.Int("cache_remaining_ttl", qCtx.CacheState.RemainingTTL),
++		zap.Int("rcode", resp.Rcode),
++		zap.String("rcode_text", dns.RcodeToString[resp.Rcode]),
++		zap.Int("resp_size", resp.Len()),
++		zap.Int("answers", len(resp.Answer)),
++		zap.Duration("elapsed", time.Since(qCtx.StartTime())),
++	}
++
++	if serverMeta.ClientAddr.IsValid() {
++		fields = append(fields,
++			zap.String("client", serverMeta.ClientAddr.String()),
++		)
++	}
++
++	var firstAnswer string
++	var originalTTL uint32
++
++	for _, rr := range resp.Answer {
++		originalTTL = rr.Header().Ttl
++
++		if firstAnswer != "" {
++			continue
++		}
++
++		switch record := rr.(type) {
++		case *dns.A:
++			firstAnswer = record.A.String()
++		case *dns.AAAA:
++			firstAnswer = record.AAAA.String()
++		case *dns.CNAME:
++			firstAnswer = record.Target
++		}
++	}
++
++	if firstAnswer != "" {
++		fields = append(fields,
++			zap.String("first_answer", firstAnswer),
++		)
++	}
++
++	if len(resp.Answer) > 0 {
++		fields = append(fields,
++			zap.Uint32("original_ttl", originalTTL),
++		)
++	}
++
++	if u := qCtx.UpstreamSelected; u != nil {
++		fields = append(fields,
++			zap.String("upstream_addr", u.Addr),
++			zap.String("upstream_protocol", u.Protocol),
++			zap.String("upstream_tag", u.Tag),
++			zap.String("upstream_plugin", u.Plugin),
++		)
++	}
++
++	h.opts.Logger.Info("query_summary", fields...)
+ 	return payload
+ }
+EOF
+
+	echo "MosDNS: created ${MOSDNS_LOCAL_PATCH}"
+	echo "MosDNS: full query log -> Debug only"
+	echo "MosDNS: compact query_summary -> Info"
+else
+	rm -f "${MOSDNS_LOCAL_PATCH}"
+fi
+
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
