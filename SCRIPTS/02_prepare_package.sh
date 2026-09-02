@@ -200,196 +200,118 @@ if [ -f "$UNM_INIT" ]; then
     sed -i '/opkg update.*opkg install node/d' "$UNM_INIT"
 fi
 
-# MosDNS：
-# 1. query log 只在 Debug 级别输出
-# 2. Info 级别保留精简但信息较完整的 query_summary
-# 3. 仅识别到当前已知的上游 Query Log 实现时才应用
-# 4. 如果以后上游修改 Query Log、增加 query_summary，
-#    或新增后续 patch 修改 entry_handler.go，则自动跳过
+### MosDNS：调整调试日志层级并扩充公共查询信息 ###
+# 1. query_summary：Info 提升为 Warn
+# 2. debug_print：Info 提升为 Warn
+# 3. 公共查询日志增加实际 ECS 和当前 marks
+# 4. cache / upstream / IP / CNAME / TTL 等继续使用上游已有信息
 
 MOSDNS_PATCH_DIR="./package/new/luci-app-mosdns/mosdns/patches"
 MOSDNS_QUERY_PATCH="${MOSDNS_PATCH_DIR}/211-feat-add-query-log-support.patch"
-MOSDNS_LOCAL_PATCH="${MOSDNS_PATCH_DIR}/999-local-query-log-level.patch"
+MOSDNS_LOCAL_PATCH="${MOSDNS_PATCH_DIR}/999-local-debug-log-enhance.patch"
+
+# 清理旧版本地补丁
+rm -f "${MOSDNS_PATCH_DIR}/999-local-query-log-level.patch"
+rm -f "${MOSDNS_LOCAL_PATCH}"
 
 MOSDNS_CAN_PATCH=1
 
-# 防止来源目录以后残留旧的本地补丁
-rm -f "${MOSDNS_LOCAL_PATCH}"
-
-# 211 不存在，说明上游结构已经发生变化
+# 当前 Query Log 上游补丁不存在，直接跳过
 if [ ! -f "${MOSDNS_QUERY_PATCH}" ]; then
-	echo "MosDNS: upstream 211 query log patch not found, skip local query log fix"
+	echo "MosDNS: upstream query log patch not found, skip local debug log enhancement"
 	MOSDNS_CAN_PATCH=0
 fi
 
-# 如果上游已经自行加入 query_summary，则完全退出本地修改
+# 如果上游已经加入 ECS / marks，则不重复添加
 if [ "${MOSDNS_CAN_PATCH}" = "1" ] && \
-	grep -Rqs 'query_summary' "${MOSDNS_PATCH_DIR}"; then
-	echo "MosDNS: upstream already contains query_summary, skip local query log fix"
+	grep -RqsE 'encoder\.AddString\("ecs"|encoder\.AddArray\("marks"' "${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream already contains ECS/marks query logging, skip local debug log enhancement"
 	MOSDNS_CAN_PATCH=0
 fi
 
-# 如果 211 之后已有其他上游 patch 修改 entry_handler.go，
-# 保守退出，避免覆盖上游后续实现或修复
+# 确认本地修改依赖的公共 Query Context 日志结构仍然存在
 if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
-	for p in "${MOSDNS_PATCH_DIR}"/*.patch; do
-		[ -e "${p}" ] || continue
+	if grep -q 'encoder.AddString("protocol", proto)' "${MOSDNS_QUERY_PATCH}" \
+		&& grep -q 'encoder.AddObject("cache"' "${MOSDNS_QUERY_PATCH}" \
+		&& grep -q 'ctx.UpstreamSelected != nil' "${MOSDNS_QUERY_PATCH}" \
+		&& grep -q 'mlog.IsDebug() && len(ctx.RuleHits) > 0' "${MOSDNS_QUERY_PATCH}"; then
 
-		base="$(basename "${p}")"
-		[ "${base}" = "$(basename "${MOSDNS_QUERY_PATCH}")" ] && continue
-		[ "${base}" = "$(basename "${MOSDNS_LOCAL_PATCH}")" ] && continue
-
-		num="${base%%-*}"
-
-		case "${num}" in
-			''|*[!0-9]*)
-				continue
-				;;
-		esac
-
-		[ "${num}" -le 211 ] && continue
-
-		if grep -q 'pkg/server_handler/entry_handler.go' "${p}"; then
-			echo "MosDNS: later upstream patch ${base} modifies entry_handler.go, skip local query log fix"
-			MOSDNS_CAN_PATCH=0
-			break
-		fi
-	done
-fi
-
-# 精确确认当前已知的上游 Query Log 代码仍然存在
-if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
-	if MOSDNS_QUERY_PATCH="${MOSDNS_QUERY_PATCH}" python3 - <<'PY'
-import os
-import sys
-from pathlib import Path
-
-p = Path(os.environ["MOSDNS_QUERY_PATCH"])
-text = p.read_text(encoding="utf-8")
-
-old_block = '''+\tif mlog.IsDebug() {
-+\t\th.opts.Logger.Debug("query log", zap.Inline(qCtx))
-+\t} else {
-+\t\th.opts.Logger.Info("query log", zap.Inline(qCtx))
-+\t}
-'''
-
-required = (
-    "CacheState",
-    "UpstreamSelected",
-    "Protocol   string",
-)
-
-ok = old_block in text and all(s in text for s in required)
-
-sys.exit(0 if ok else 1)
-PY
-	then
-		echo "MosDNS: detected known upstream full query log at Info level"
+		echo "MosDNS: detected known upstream query context logging"
 	else
-		echo "MosDNS: upstream query log implementation changed/fixed, skip local query log fix"
+		echo "MosDNS: upstream query context logging changed, skip local debug log enhancement"
 		MOSDNS_CAN_PATCH=0
 	fi
 fi
 
-# 只有完整通过所有检查后才生成本地补丁
 if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
 
 	cat > "${MOSDNS_LOCAL_PATCH}" <<'EOF'
---- a/pkg/server_handler/entry_handler.go
-+++ b/pkg/server_handler/entry_handler.go
-@@ -131,10 +131,82 @@
- 		h.opts.Logger.Error("internal err: failed to pack resp msg", qCtx.InfoField(), zap.Error(err))
- 		return nil
+--- a/pkg/query_context/context.go
++++ b/pkg/query_context/context.go
+@@ -20,5 +20,6 @@
+ import (
+ 	"fmt"
++	"sort"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -314,3 +315,26 @@
+ 	encoder.AddString("protocol", proto)
+ 
++	for _, option := range ctx.QOpt().Option {
++		if ecs, ok := option.(*dns.EDNS0_SUBNET); ok {
++			encoder.AddString("ecs", fmt.Sprintf("%s/%d", ecs.Address.String(), ecs.SourceNetmask))
++			break
++		}
++	}
++
++	if len(ctx.marks) > 0 {
++		marks := make([]uint32, 0, len(ctx.marks))
++		for mark := range ctx.marks {
++			marks = append(marks, mark)
++		}
++		sort.Slice(marks, func(i, j int) bool {
++			return marks[i] < marks[j]
++		})
++		encoder.AddArray("marks", zapcore.ArrayMarshalerFunc(func(arr zapcore.ArrayEncoder) error {
++			for _, mark := range marks {
++				arr.AppendUint32(mark)
++			}
++			return nil
++		}))
++	}
++
+ 	if mlog.IsDebug() && len(ctx.RuleHits) > 0 {
+--- a/plugin/executable/query_summary/query_summary.go
++++ b/plugin/executable/query_summary/query_summary.go
+@@ -63,6 +63,6 @@
+ func (l *SummaryLogger) Exec(ctx context.Context, qCtx *query_context.Context, next sequence.ChainWalker) error {
+ 	err := next.ExecNext(ctx, qCtx)
+-	l.l.Info(
++	l.l.Warn(
+ 		l.msg,
+ 		zap.Inline(qCtx),
+ 		zap.Error(err),
+--- a/plugin/executable/debug_print/print.go
++++ b/plugin/executable/debug_print/print.go
+@@ -52,7 +52,7 @@
+ func (b *DebugPrint) Exec(_ context.Context, qCtx *query_context.Context) error {
+-	b.BQ.L().Info(b.msg, zap.Stringer("query", qCtx.Q()))
++	b.BQ.L().Warn(b.msg, zap.Stringer("query", qCtx.Q()))
+ 	if r := qCtx.R(); r != nil {
+-		b.BQ.L().Info(b.msg, zap.Stringer("response", r))
++		b.BQ.L().Warn(b.msg, zap.Stringer("response", r))
  	}
--	if mlog.IsDebug() {
--		h.opts.Logger.Debug("query log", zap.Inline(qCtx))
--	} else {
--		h.opts.Logger.Info("query log", zap.Inline(qCtx))
-+	h.opts.Logger.Debug("query log", zap.Inline(qCtx))
-+
-+	question := qCtx.QQuestion()
-+	proto := serverMeta.Protocol
-+	if proto == "" {
-+		if serverMeta.FromUDP {
-+			proto = "UDP"
-+		} else {
-+			proto = "TCP"
-+		}
- 	}
-+
-+	fields := []zap.Field{
-+		zap.Uint32("uqid", qCtx.Id()),
-+		zap.String("qname", question.Name),
-+		zap.String("qtype", dns.TypeToString[question.Qtype]),
-+		zap.Uint16("qclass", question.Qclass),
-+		zap.String("protocol", proto),
-+		zap.Bool("cache_hit", qCtx.CacheState.Hit),
-+		zap.Bool("cache_lazy_hit", qCtx.CacheState.LazyHit),
-+		zap.Int("cache_ttl", qCtx.CacheState.TTL),
-+		zap.Int("cache_remaining_ttl", qCtx.CacheState.RemainingTTL),
-+		zap.Int("rcode", resp.Rcode),
-+		zap.String("rcode_text", dns.RcodeToString[resp.Rcode]),
-+		zap.Int("resp_size", resp.Len()),
-+		zap.Int("answers", len(resp.Answer)),
-+		zap.Duration("elapsed", time.Since(qCtx.StartTime())),
-+	}
-+
-+	if serverMeta.ClientAddr.IsValid() {
-+		fields = append(fields,
-+			zap.String("client", serverMeta.ClientAddr.String()),
-+		)
-+	}
-+
-+	var firstAnswer string
-+	var originalTTL uint32
-+
-+	for _, rr := range resp.Answer {
-+		originalTTL = rr.Header().Ttl
-+
-+		if firstAnswer != "" {
-+			continue
-+		}
-+
-+		switch record := rr.(type) {
-+		case *dns.A:
-+			firstAnswer = record.A.String()
-+		case *dns.AAAA:
-+			firstAnswer = record.AAAA.String()
-+		case *dns.CNAME:
-+			firstAnswer = record.Target
-+		}
-+	}
-+
-+	if firstAnswer != "" {
-+		fields = append(fields,
-+			zap.String("first_answer", firstAnswer),
-+		)
-+	}
-+
-+	if len(resp.Answer) > 0 {
-+		fields = append(fields,
-+			zap.Uint32("original_ttl", originalTTL),
-+		)
-+	}
-+
-+	if u := qCtx.UpstreamSelected; u != nil {
-+		fields = append(fields,
-+			zap.String("upstream_addr", u.Addr),
-+			zap.String("upstream_protocol", u.Protocol),
-+			zap.String("upstream_tag", u.Tag),
-+			zap.String("upstream_plugin", u.Plugin),
-+		)
-+	}
-+
-+	h.opts.Logger.Info("query_summary", fields...)
- 	return payload
+ 	return nil
  }
 EOF
 
 	echo "MosDNS: created ${MOSDNS_LOCAL_PATCH}"
-	echo "MosDNS: full query log -> Debug only"
-	echo "MosDNS: compact query_summary -> Info"
+	echo "MosDNS: query log -> keep upstream behavior"
+	echo "MosDNS: query_summary -> Warn"
+	echo "MosDNS: debug_print -> Warn"
+	echo "MosDNS: query context -> add ECS and sorted marks"
 else
 	rm -f "${MOSDNS_LOCAL_PATCH}"
 fi
