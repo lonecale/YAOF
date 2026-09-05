@@ -259,6 +259,8 @@ jobs:
         working-directory: ${{ github.workspace }}/openwrt
         run: |
           make defconfig
+          echo "===== ZRAM final config ====="
+          grep -E '^(CONFIG_PACKAGE_(zram-swap|kmod-zram|kmod-lib-lzo|kmod-lib-lz4|kmod-lib-zstd)|CONFIG_KERNEL_ZRAM_)' .config || true
 
       - name: Get Architecture
         id: getarch
