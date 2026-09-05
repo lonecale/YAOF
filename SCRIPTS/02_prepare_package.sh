@@ -8,6 +8,38 @@ sed -i 's/Os/O2/g' include/target.mk
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
+### ZRAM：补充 lzo-rle 并设为 LuCI 默认算法 ###
+LUCI_SYSTEM_JS="./feeds/luci/modules/luci-mod-system/htdocs/luci-static/resources/view/system/system.js"
+
+if [ -f "$LUCI_SYSTEM_JS" ]; then
+
+    if grep -Fq "o.value('lzo-rle', 'lzo-rle');" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: upstream already provides lzo-rle, skip adding option"
+    elif grep -Fq "o.value('lzo', 'lzo');" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: add lzo-rle option"
+        sed -i "/o.value('lzo', 'lzo');/{h;s/o.value('lzo', 'lzo');/o.value('lzo-rle', 'lzo-rle');/;p;g;}" \
+            "$LUCI_SYSTEM_JS"
+    else
+        echo "ZRAM LuCI: lzo option pattern changed, skip adding lzo-rle"
+    fi
+
+    if grep -Fq "o.default     = 'lzo-rle';" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: default already lzo-rle, skip changing default"
+    elif grep -Fq "o.default     = 'lzo';" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: change default from lzo to lzo-rle"
+        sed -i "s/o.default     = 'lzo';/o.default     = 'lzo-rle';/" \
+            "$LUCI_SYSTEM_JS"
+    else
+        echo "ZRAM LuCI: default algorithm pattern changed, skip changing default"
+    fi
+
+    echo "===== ZRAM LuCI config ====="
+    grep -n -A8 -B2 "zram_comp_algo" "$LUCI_SYSTEM_JS" || true
+
+else
+    echo "ZRAM LuCI: system.js not found, skip"
+fi
+
 # 定义预期的内核版本
 SUPPORTED_KERNEL="6.12"
 
