@@ -49,6 +49,12 @@ cat > "$DEFAULT_SETTINGS" <<'EOF'
 
 ### 主机名 ###
 uci -q set system.@system[0].hostname='EZwrt'
+
+### ZRAM 默认压缩算法 ###
+if ! uci -q get system.@system[0].zram_comp_algo >/dev/null 2>&1; then
+    uci -q set system.@system[0].zram_comp_algo='lzo-rle'
+fi
+
 uci -q commit system
 echo 'EZwrt' > /proc/sys/kernel/hostname 2>/dev/null || true
 
