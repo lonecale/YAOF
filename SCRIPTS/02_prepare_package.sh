@@ -232,11 +232,12 @@ if [ -f "$UNM_INIT" ]; then
     sed -i '/opkg update.*opkg install node/d' "$UNM_INIT"
 fi
 
-### MosDNS：调整调试日志层级并扩充公共查询信息 ###
-# 1. query_summary：Info 提升为 Warn
-# 2. debug_print：Info 提升为 Warn
+### MosDNS：保留关键诊断日志并扩充公共查询信息 ###
+# 1. query_summary：使用 Warn 门槛保留输出，最终显示为 Info
+# 2. debug_print：使用 Warn 门槛保留输出，最终显示为 Info
 # 3. 公共查询日志增加实际 ECS 和当前 marks
 # 4. cache / upstream / IP / CNAME / TTL 等继续使用上游已有信息
+# 5. 上游相关实现发生变化时，只跳过对应本地增强，避免重复修改或错误套用旧补丁
 
 MOSDNS_PATCH_DIR="./package/new/luci-app-mosdns/mosdns/patches"
 MOSDNS_QUERY_PATCH="${MOSDNS_PATCH_DIR}/211-feat-add-query-log-support.patch"
@@ -246,24 +247,26 @@ MOSDNS_LOCAL_PATCH="${MOSDNS_PATCH_DIR}/999-local-debug-log-enhance.patch"
 rm -f "${MOSDNS_PATCH_DIR}/999-local-query-log-level.patch"
 rm -f "${MOSDNS_LOCAL_PATCH}"
 
-MOSDNS_CAN_PATCH=1
+MOSDNS_CONTEXT_PATCH=1
+MOSDNS_LOG_PATCH=1
 
-# 当前 Query Log 上游补丁不存在，直接跳过
+# 当前 Query Log 上游补丁不存在时，无法确认依赖结构
 if [ ! -f "${MOSDNS_QUERY_PATCH}" ]; then
 	echo "MosDNS: upstream query log patch not found, skip local debug log enhancement"
-	MOSDNS_CAN_PATCH=0
+	MOSDNS_CONTEXT_PATCH=0
+	MOSDNS_LOG_PATCH=0
 fi
 
-# 如果上游已经加入 ECS / marks，则不重复添加
-if [ "${MOSDNS_CAN_PATCH}" = "1" ] && \
+# ECS / marks 已由上游实现时，不再重复增加
+if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ] && \
 	grep -RqsE 'encoder\.AddString\("ecs"|encoder\.AddArray\("marks"' "${MOSDNS_PATCH_DIR}"; then
 
-	echo "MosDNS: upstream already contains ECS/marks query logging, skip local debug log enhancement"
-	MOSDNS_CAN_PATCH=0
+	echo "MosDNS: upstream already contains ECS/marks query logging, skip local query context enhancement"
+	MOSDNS_CONTEXT_PATCH=0
 fi
 
-# 确认本地修改依赖的公共 Query Context 日志结构仍然存在
-if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
+# 确认本地 ECS / marks 修改依赖的公共 Query Context 结构仍然存在
+if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ]; then
 	if grep -q 'encoder.AddString("protocol", proto)' "${MOSDNS_QUERY_PATCH}" \
 		&& grep -q 'encoder.AddObject("cache"' "${MOSDNS_QUERY_PATCH}" \
 		&& grep -q 'ctx.UpstreamSelected != nil' "${MOSDNS_QUERY_PATCH}" \
@@ -271,14 +274,28 @@ if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
 
 		echo "MosDNS: detected known upstream query context logging"
 	else
-		echo "MosDNS: upstream query context logging changed, skip local debug log enhancement"
-		MOSDNS_CAN_PATCH=0
+		echo "MosDNS: upstream query context logging changed, skip local query context enhancement"
+		MOSDNS_CONTEXT_PATCH=0
 	fi
 fi
 
-if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
+# 如果 sbw 后续补丁已经修改 query_summary / debug_print，
+# 停止自动修改这两个插件，避免重复处理或和新的上游实现冲突
+if [ "${MOSDNS_LOG_PATCH}" = "1" ] && \
+	grep -RqsE 'plugin/executable/(query_summary/query_summary\.go|debug_print/print\.go)' "${MOSDNS_PATCH_DIR}"; then
 
-	cat > "${MOSDNS_LOCAL_PATCH}" <<'EOF'
+	echo "MosDNS: upstream modifies query_summary/debug_print, skip local log level enhancement"
+	MOSDNS_LOG_PATCH=0
+fi
+
+# 创建本地补丁
+if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ] || [ "${MOSDNS_LOG_PATCH}" = "1" ]; then
+
+	: > "${MOSDNS_LOCAL_PATCH}"
+
+	# 公共 Query Context 增加 ECS 和排序后的 marks
+	if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ]; then
+		cat >> "${MOSDNS_LOCAL_PATCH}" <<'EOF'
 --- a/pkg/query_context/context.go
 +++ b/pkg/query_context/context.go
 @@ -20,5 +20,6 @@
@@ -315,37 +332,73 @@ if [ "${MOSDNS_CAN_PATCH}" = "1" ]; then
 +	}
 +
  	if mlog.IsDebug() && len(ctx.RuleHits) > 0 {
+EOF
+	fi
+
+	# query_summary / debug_print：
+	# 使用 Warn 级别参与日志门槛判断，通过后将最终显示级别恢复为 Info
+	if [ "${MOSDNS_LOG_PATCH}" = "1" ]; then
+		cat >> "${MOSDNS_LOCAL_PATCH}" <<'EOF'
 --- a/plugin/executable/query_summary/query_summary.go
 +++ b/plugin/executable/query_summary/query_summary.go
-@@ -63,6 +63,6 @@
+@@ -62,9 +62,11 @@
  func (l *SummaryLogger) Exec(ctx context.Context, qCtx *query_context.Context, next sequence.ChainWalker) error {
  	err := next.ExecNext(ctx, qCtx)
 -	l.l.Info(
-+	l.l.Warn(
- 		l.msg,
- 		zap.Inline(qCtx),
- 		zap.Error(err),
+-		l.msg,
+-		zap.Inline(qCtx),
+-		zap.Error(err),
+-	)
++	if ce := l.l.Check(zap.WarnLevel, l.msg); ce != nil {
++		ce.Entry.Level = zap.InfoLevel
++		ce.Write(
++			zap.Inline(qCtx),
++			zap.Error(err),
++		)
++	}
+ 	return err
+ }
 --- a/plugin/executable/debug_print/print.go
 +++ b/plugin/executable/debug_print/print.go
-@@ -52,7 +52,7 @@
+@@ -51,7 +51,16 @@
  func (b *DebugPrint) Exec(_ context.Context, qCtx *query_context.Context) error {
 -	b.BQ.L().Info(b.msg, zap.Stringer("query", qCtx.Q()))
-+	b.BQ.L().Warn(b.msg, zap.Stringer("query", qCtx.Q()))
++	l := b.BQ.L()
++
++	if ce := l.Check(zap.WarnLevel, b.msg); ce != nil {
++		ce.Entry.Level = zap.InfoLevel
++		ce.Write(zap.Stringer("query", qCtx.Q()))
++	}
++
  	if r := qCtx.R(); r != nil {
 -		b.BQ.L().Info(b.msg, zap.Stringer("response", r))
-+		b.BQ.L().Warn(b.msg, zap.Stringer("response", r))
++		if ce := l.Check(zap.WarnLevel, b.msg); ce != nil {
++			ce.Entry.Level = zap.InfoLevel
++			ce.Write(zap.Stringer("response", r))
++		}
  	}
  	return nil
  }
 EOF
+	fi
 
 	echo "MosDNS: created ${MOSDNS_LOCAL_PATCH}"
-	echo "MosDNS: query log -> keep upstream behavior"
-	echo "MosDNS: query_summary -> Warn"
-	echo "MosDNS: debug_print -> Warn"
-	echo "MosDNS: query context -> add ECS and sorted marks"
+
+	if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ]; then
+		echo "MosDNS: query context -> add ECS and sorted marks"
+	else
+		echo "MosDNS: query context -> keep upstream behavior"
+	fi
+
+	if [ "${MOSDNS_LOG_PATCH}" = "1" ]; then
+		echo "MosDNS: query_summary -> Warn threshold / Info display"
+		echo "MosDNS: debug_print -> Warn threshold / Info display"
+	else
+		echo "MosDNS: query_summary/debug_print -> keep upstream behavior"
+	fi
 else
 	rm -f "${MOSDNS_LOCAL_PATCH}"
+	echo "MosDNS: no local debug log enhancement required"
 fi
 
 # 添加自定义第三方包
