@@ -578,12 +578,17 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-theme-kucat=y" "$SEED_FI
 fi
 
 ### WechatPush：补充新版 rpcd 的 /proc/net/arp 真实路径读取权限 ###
+### 上游已于 2026-08 改用 luci-rpc getHostHints，暂时停用本地兼容，保留代码便于回溯
+: <<'WECHATPUSH_ARP_UPSTREAM_FIXED'
+
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
     WECHATPUSH_ACL="./package/new/luci-app-wechatpush/root/usr/share/rpcd/acl.d/luci-app-wechatpush.json"
     WECHATPUSH_ACL_BAK="./package/new/luci-app-wechatpush/luci-app-wechatpush.json.bak"
     [ -f "$WECHATPUSH_ACL_BAK" ] || cp -af "$WECHATPUSH_ACL" "$WECHATPUSH_ACL_BAK"
     grep -q '"/proc/\*/net/arp"' "$WECHATPUSH_ACL" || sed -i '/"\/proc\/net\/arp": \[ "read" \],/a\				"/proc/*/net/arp": [ "read" ],' "$WECHATPUSH_ACL"
 fi
+
+WECHATPUSH_ARP_UPSTREAM_FIXED
 
 ### WechatPush：修复温度测试失败后进入主循环 ###
 if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
