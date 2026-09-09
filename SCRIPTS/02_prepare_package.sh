@@ -401,6 +401,111 @@ else
 	echo "MosDNS: no local debug log enhancement required"
 fi
 
+### OpenAppFilter：修复异常 skb 长度导致超大内存申请 ###
+# 1. 非线性 skb 处理前增加 l4_len > 0 检查
+# 2. read_skb 增加 from / len 最终边界检查
+# 3. 网络 softirq 路径内存申请改用 GFP_ATOMIC
+# 4. 兼容 sbwml v6 的 app_filter.c 和 destan19 新版的 fwx_main.c
+
+OAF_SRC=""
+OAF_CAN_PATCH=1
+
+# 优先识别 destan19 新版源码
+if [ -f "./package/new/OpenAppFilter/oaf/src/fwx_main.c" ]; then
+	OAF_SRC="./package/new/OpenAppFilter/oaf/src/fwx_main.c"
+
+# 兼容 sbwml v6 当前源码
+elif [ -f "./package/new/OpenAppFilter/oaf/src/app_filter.c" ]; then
+	OAF_SRC="./package/new/OpenAppFilter/oaf/src/app_filter.c"
+
+else
+	echo "OpenAppFilter: source file not found, skip safety patch"
+	OAF_CAN_PATCH=0
+fi
+
+### 1. 修复 l4_len 负数进入 read_skb ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	OAF_OLD_COND='if (skb_is_nonlinear(skb) && flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)'
+	OAF_NEW_COND='if (skb_is_nonlinear(skb) && flow.l4_len > 0 && flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)'
+
+	# 仍存在旧代码时全部修复
+	if grep -Fq "${OAF_OLD_COND}" "${OAF_SRC}"; then
+		echo "OpenAppFilter: add l4_len > 0 check"
+
+		sed -i \
+			's/if (skb_is_nonlinear(skb) && flow\.l4_len < MAX_AF_SUPPORT_DATA_LEN)/if (skb_is_nonlinear(skb) \&\& flow.l4_len > 0 \&\& flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)/g' \
+			"${OAF_SRC}"
+
+	# 已经全部采用安全条件时不重复修改
+	elif grep -Fq "${OAF_NEW_COND}" "${OAF_SRC}"; then
+		echo "OpenAppFilter: upstream already has l4_len > 0 check"
+
+	else
+		echo "OpenAppFilter: l4_len code structure changed, skip this patch"
+	fi
+fi
+
+### 2. 给 read_skb 增加最终边界检查 ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	# 上游已经存在相同或等效边界检查时不重复添加
+	if grep -Fq "len > skb->len - from" "${OAF_SRC}"; then
+		echo "OpenAppFilter: upstream already has read_skb bounds check"
+
+	else
+		OAF_CONSUMED_COUNT="$(grep -Ec '^[[:space:]]*unsigned int consumed = 0;' "${OAF_SRC}")"
+
+		if [ "${OAF_CONSUMED_COUNT}" -eq 1 ]; then
+			echo "OpenAppFilter: add read_skb bounds check"
+
+			sed -i $'/^[[:space:]]*unsigned int consumed = 0;/a\\\n\\\n\tif (!skb || !len || len > MAX_AF_SUPPORT_DATA_LEN)\\\n\t\treturn NULL;\\\n\\\n\tif (from >= skb->len || len > skb->len - from)\\\n\t\treturn NULL;' \
+				"${OAF_SRC}"
+
+		else
+			echo "OpenAppFilter: read_skb structure changed, skip bounds patch"
+		fi
+	fi
+fi
+
+### 3. read_skb 网络 softirq 路径使用 GFP_ATOMIC ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	if grep -Fq "msg_buf = kmalloc(len, GFP_ATOMIC);" "${OAF_SRC}"; then
+		echo "OpenAppFilter: upstream already uses GFP_ATOMIC"
+
+	else
+		OAF_GFP_COUNT="$(grep -Fc "msg_buf = kmalloc(len, GFP_KERNEL);" "${OAF_SRC}")"
+
+		if [ "${OAF_GFP_COUNT}" -eq 1 ]; then
+			echo "OpenAppFilter: change read_skb GFP_KERNEL to GFP_ATOMIC"
+
+			sed -i \
+				's/msg_buf = kmalloc(len, GFP_KERNEL);/msg_buf = kmalloc(len, GFP_ATOMIC);/' \
+				"${OAF_SRC}"
+
+		else
+			echo "OpenAppFilter: kmalloc code structure changed, skip GFP patch"
+		fi
+	fi
+fi
+
+### OpenAppFilter 修改结果检查 ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+	echo "===== OpenAppFilter safety patch ====="
+	echo "Source: ${OAF_SRC}"
+
+	echo "===== l4_len checks ====="
+	grep -n \
+		"skb_is_nonlinear(skb).*flow.l4_len" \
+		"${OAF_SRC}" || true
+
+	echo "===== read_skb ====="
+	grep -n -A18 \
+		"static unsigned char \*read_skb" \
+		"${OAF_SRC}" || true
+fi
+
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
 cp -rf ../OpenWrt-Custom ./package/custom
