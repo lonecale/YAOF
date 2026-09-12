@@ -64,6 +64,7 @@ kavass168_timecontrol_repo="https://github.com/kavass168/luci-app-timecontrol-25
 sbw_quickfile_repo="https://github.com/sbwml/luci-app-quickfile"
 sundaqiang_wolplus_repo="https://github.com/sundaqiang/openwrt-packages"
 agogo233_wolplus_repo="https://github.com/agogo233/luci-app-wolplus"
+destan19_openappfilter_repo="https://github.com/destan19/OpenAppFilter"
 
 # 开始克隆仓库，并行执行
 clone_repo $openwrt_repo $latest_release openwrt &
@@ -109,9 +110,10 @@ clone_repo $stevenjoezhang_adguardhome_repo dev OpenWrt-Custom/luci-app-adguardh
 # WOLPlus：使用 agogo233 版本
 clone_repo $agogo233_wolplus_repo main OpenWrt-Custom/luci-app-wolplus &
 
-
 # sbwml 系列自定义包
 clone_repo $sbw_quickfile_repo main OpenWrt-Custom/luci-app-quickfile &
+# openappfilter：使用 destan19 版本
+clone_repo $destan19_openappfilter_repo master OpenAppFilter &
 
 # 等待所有后台任务完成
 wait
