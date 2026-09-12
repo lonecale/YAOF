@@ -401,6 +401,10 @@ else
 	echo "MosDNS: no local debug log enhancement required"
 fi
 
+### OpenAppFilter：切换到 destan19 官方源码 ###
+rm -rf ./package/new/OpenAppFilter
+cp -rf ../OpenAppFilter ./package/new/OpenAppFilter
+
 ### OpenAppFilter：修复异常 skb 长度导致超大内存申请 ###
 # 1. 非线性 skb 处理前增加 l4_len > 0 检查
 # 2. read_skb 增加 from / len 最终边界检查
