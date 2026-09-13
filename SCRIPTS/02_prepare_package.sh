@@ -411,7 +411,7 @@ OAF_DASHBOARD="./package/new/OpenAppFilter/luci-app-oaf/luasrc/view/oaf/dashboar
 OAF_UBUS_SRC="./package/new/OpenAppFilter/open-app-filter/src/fwx_ubus.c"
 
 
-### 1. 修复打开 OAF Dashboard 后 自动切菜单样式 ###
+### 1. 修复打开 OAF Dashboard 后自动切菜单样式 ###
 # OAF Dashboard 会主动写入：
 # localStorage.setItem('luci-menu-category', 'basic');
 #
@@ -463,7 +463,7 @@ fi
 #
 # 已在实际运行环境验证：
 # 使用 top -b -n 1 后无 TTY 报错消失，
-# 对所有 %Cpu 行的第 9 列 idle 求平均后，
+# 自动定位每个 %Cpu 行的 id 字段，读取其前一列 idle 数值并求平均，
 # 可继续兼容上游现有的：
 # cpu_usage = 100 - atoi(result);
 #
