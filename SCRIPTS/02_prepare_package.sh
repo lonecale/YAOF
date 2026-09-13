@@ -473,7 +473,7 @@ fi
 if [ -f "${OAF_UBUS_SRC}" ]; then
 
 	OAF_CPU_OLD="top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'"
-	OAF_CPU_NEW="top -b -n 1 | awk '/^%Cpu/{s+=\$9;n++} END{if(n) print s/n; else print 100}'"
+	OAF_CPU_NEW="LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print s/n; else print 100}'"
 
 	OAF_CPU_OLD_COUNT="$(grep -Fc "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}")"
 
@@ -481,7 +481,7 @@ if [ -f "${OAF_UBUS_SRC}" ]; then
 		echo "OpenAppFilter: fix oafd procps-ng top compatibility"
 
 		sed -i \
-			"s@top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'@top -b -n 1 | awk '/^%Cpu/{s+=\$9;n++} END{if(n) print s/n; else print 100}'@" \
+			"s@top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'@LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print s/n; else print 100}'@" \
 			"${OAF_UBUS_SRC}"
 
 	elif grep -Fq "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}"; then
