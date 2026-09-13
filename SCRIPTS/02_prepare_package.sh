@@ -401,9 +401,124 @@ else
 	echo "MosDNS: no local debug log enhancement required"
 fi
 
-### OpenAppFilter：切换到 destan19 官方源码 ###
+### OpenAppFilter：切换到 destan19 源码 ###
 rm -rf ./package/new/OpenAppFilter
 cp -rf ../OpenAppFilter ./package/new/OpenAppFilter
+
+### OpenAppFilter： 运行环境兼容修复 ###
+
+OAF_DASHBOARD="./package/new/OpenAppFilter/luci-app-oaf/luasrc/view/oaf/dashboard.htm"
+OAF_UBUS_SRC="./package/new/OpenAppFilter/open-app-filter/src/fwx_ubus.c"
+
+
+### 1. 修复打开 OAF Dashboard 后 自动切菜单样式 ###
+# OAF Dashboard 会主动写入：
+# localStorage.setItem('luci-menu-category', 'basic');
+#
+# 这会覆盖 KuCat 已保存的 allmenu 状态，
+# 导致进入 OAF 页面后从“完整菜单”自动切回“自定义菜单”。
+#
+# 仅在该旧代码精确出现 1 次时删除。
+# 如果上游已经修复或代码结构发生变化，则自动跳过。
+
+if [ -f "${OAF_DASHBOARD}" ]; then
+
+	OAF_KUCAT_OLD="localStorage.setItem('luci-menu-category', 'basic');"
+	OAF_KUCAT_OLD_COUNT="$(grep -Fc "${OAF_KUCAT_OLD}" "${OAF_DASHBOARD}")"
+
+	if [ "${OAF_KUCAT_OLD_COUNT}" -eq 1 ]; then
+		echo "OpenAppFilter: fix Dashboard forcing KuCat custom menu"
+
+		sed -i \
+			"/localStorage.setItem('luci-menu-category', 'basic');/d" \
+			"${OAF_DASHBOARD}"
+
+	elif [ "${OAF_KUCAT_OLD_COUNT}" -eq 0 ]; then
+		echo "OpenAppFilter: KuCat menu issue already fixed upstream, skip"
+
+	else
+		echo "OpenAppFilter: unexpected KuCat menu code count ${OAF_KUCAT_OLD_COUNT}, skip"
+	fi
+
+else
+	echo "OpenAppFilter: dashboard.htm not found, skip KuCat menu fix"
+fi
+
+
+### 2. 修复 oafd 后台调用 top 报错及多核 CPU 解析兼容 ###
+# 原代码：
+# top -n 1 | grep 'CPU:' ...
+#
+# 在 当前 procps-ng 环境存在两个问题：
+#
+# 1. oafd 由 procd 后台运行，没有 TTY，
+#    top -n 1 会持续输出：
+#    top: failed tty get
+#
+# 2. procps-ng 多核 CPU 输出为：
+#    %Cpu0
+#    %Cpu1
+#    ...
+#    原来的 grep 'CPU:' 无法正确取得 idle。
+#
+# 已在实际运行环境验证：
+# 使用 top -b -n 1 后无 TTY 报错消失，
+# 对所有 %Cpu 行的第 9 列 idle 求平均后，
+# 可继续兼容上游现有的：
+# cpu_usage = 100 - atoi(result);
+#
+# 仅在当前已确认的问题代码精确出现 1 次时修改。
+# 如果上游已经修复或实现发生变化，则自动跳过。
+
+if [ -f "${OAF_UBUS_SRC}" ]; then
+
+	OAF_CPU_OLD="top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'"
+	OAF_CPU_NEW="top -b -n 1 | awk '/^%Cpu/{s+=\$9;n++} END{if(n) print s/n; else print 100}'"
+
+	OAF_CPU_OLD_COUNT="$(grep -Fc "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}")"
+
+	if [ "${OAF_CPU_OLD_COUNT}" -eq 1 ]; then
+		echo "OpenAppFilter: fix oafd procps-ng top compatibility"
+
+		sed -i \
+			"s@top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'@top -b -n 1 | awk '/^%Cpu/{s+=\$9;n++} END{if(n) print s/n; else print 100}'@" \
+			"${OAF_UBUS_SRC}"
+
+	elif grep -Fq "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}"; then
+		echo "OpenAppFilter: oafd top compatibility fix already applied"
+
+	elif [ "${OAF_CPU_OLD_COUNT}" -eq 0 ]; then
+		echo "OpenAppFilter: CPU code already changed upstream, skip"
+
+	else
+		echo "OpenAppFilter: unexpected CPU command count ${OAF_CPU_OLD_COUNT}, skip"
+	fi
+
+else
+	echo "OpenAppFilter: fwx_ubus.c not found, skip CPU compatibility fix"
+fi
+
+
+### OpenAppFilter 兼容修复结果检查 ###
+
+echo "===== OpenAppFilter YAOF compatibility patch ====="
+
+if [ -f "${OAF_DASHBOARD}" ]; then
+	if grep -Fq "localStorage.setItem('luci-menu-category', 'basic');" "${OAF_DASHBOARD}"; then
+		echo "KuCat menu compatibility: NOT PATCHED"
+	else
+		echo "KuCat menu compatibility: OK"
+	fi
+fi
+
+if [ -f "${OAF_UBUS_SRC}" ]; then
+	if grep -Fq "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}"; then
+		echo "oafd top compatibility: OK"
+		grep -n -F "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}" || true
+	else
+		echo "oafd top compatibility: upstream changed or patch skipped"
+	fi
+fi
 
 ### OpenAppFilter：修复异常 skb 长度导致超大内存申请 ###
 # 1. 非线性 skb 处理前增加 l4_len > 0 检查
