@@ -405,7 +405,7 @@ fi
 rm -rf ./package/new/OpenAppFilter
 cp -rf ../OpenAppFilter ./package/new/OpenAppFilter
 
-### OpenAppFilter： 运行环境兼容修复 ###
+### OpenAppFilter：运行环境兼容修复 ###
 
 OAF_DASHBOARD="./package/new/OpenAppFilter/luci-app-oaf/luasrc/view/oaf/dashboard.htm"
 OAF_UBUS_SRC="./package/new/OpenAppFilter/open-app-filter/src/fwx_ubus.c"
@@ -434,7 +434,7 @@ if [ -f "${OAF_DASHBOARD}" ]; then
 			"${OAF_DASHBOARD}"
 
 	elif [ "${OAF_KUCAT_OLD_COUNT}" -eq 0 ]; then
-		echo "OpenAppFilter: KuCat menu issue already fixed upstream, skip"
+		echo "OpenAppFilter: KuCat target code not found, skip"
 
 	else
 		echo "OpenAppFilter: unexpected KuCat menu code count ${OAF_KUCAT_OLD_COUNT}, skip"
@@ -488,7 +488,7 @@ if [ -f "${OAF_UBUS_SRC}" ]; then
 		echo "OpenAppFilter: oafd top compatibility fix already applied"
 
 	elif [ "${OAF_CPU_OLD_COUNT}" -eq 0 ]; then
-		echo "OpenAppFilter: CPU code already changed upstream, skip"
+		echo "OpenAppFilter: CPU target code not found or already changed, skip"
 
 	else
 		echo "OpenAppFilter: unexpected CPU command count ${OAF_CPU_OLD_COUNT}, skip"
