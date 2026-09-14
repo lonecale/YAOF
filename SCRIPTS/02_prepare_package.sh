@@ -498,6 +498,90 @@ else
 	echo "OpenAppFilter: fwx_ubus.c not found, skip CPU compatibility fix"
 fi
 
+### 3. destan19 OpenAppFilter 7.x：运行时兼容修复 ###
+# 仅针对 destan19 7.x：
+# 1. /usr/bin/oaf_rule 不存在时不执行 legacy reload
+# 2. fwx_agent 不存在时不执行可选 forward
+#
+# 上游以后修复相应代码后，本补丁自动跳过。
+
+OAF_DESTAN_ROOT="./package/new/OpenAppFilter/open-app-filter"
+OAF_UBUS_SRC="${OAF_DESTAN_ROOT}/src/fwx_ubus.c"
+OAF_RULE_MANAGER="${OAF_DESTAN_ROOT}/files/rule_manager.lua"
+
+if [ -f "${OAF_UBUS_SRC}" ] && [ -f "${OAF_RULE_MANAGER}" ]; then
+
+	OAF_UBUS_SRC="${OAF_UBUS_SRC}" python3 <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["OAF_UBUS_SRC"])
+text = path.read_text(encoding="utf-8")
+original = text
+
+
+# ============================================================
+# 1. legacy /usr/bin/oaf_rule
+# ============================================================
+
+old_oaf_rule = '''void reload_oaf_rule(){
+    system("/usr/bin/oaf_rule reload");
+}'''
+
+new_oaf_rule = '''void reload_oaf_rule(){
+    if (access("/usr/bin/oaf_rule", X_OK) == 0)
+        system("/usr/bin/oaf_rule reload");
+}'''
+
+if old_oaf_rule in text:
+    text = text.replace(old_oaf_rule, new_oaf_rule, 1)
+    print("OpenAppFilter: guard legacy oaf_rule reload")
+elif new_oaf_rule in text:
+    print("OpenAppFilter: oaf_rule guard already applied")
+else:
+    print("OpenAppFilter: oaf_rule implementation changed upstream, skip")
+
+
+# ============================================================
+# 2. optional fwx_agent
+# ============================================================
+
+old_agent = '''static void fwx_forward_to_agent(struct json_object *req_obj) {
+\tchar *cmd_buf = NULL;
+\tif (!req_obj)
+\t\treturn;'''
+
+new_agent = '''static void fwx_forward_to_agent(struct json_object *req_obj) {
+\tchar *cmd_buf = NULL;
+\tuint32_t agent_id = 0;
+
+\tif (!req_obj || !ubus_ctx)
+\t\treturn;
+
+\tif (ubus_lookup_id(ubus_ctx, "fwx_agent", &agent_id) != 0)
+\t\treturn;'''
+
+if 'ubus_lookup_id(ubus_ctx, "fwx_agent"' in text:
+    print("OpenAppFilter: fwx_agent guard already applied")
+elif old_agent in text:
+    text = text.replace(old_agent, new_agent, 1)
+    print("OpenAppFilter: guard optional fwx_agent forwarding")
+elif 'ubus -t 2 call fwx_agent forward' not in text:
+    print("OpenAppFilter: fwx_agent forwarding changed upstream, skip")
+else:
+    print("OpenAppFilter: fwx_agent function structure changed upstream, skip")
+
+
+if text != original:
+    path.write_text(text, encoding="utf-8")
+    print("OpenAppFilter: runtime compatibility patched")
+else:
+    print("OpenAppFilter: runtime compatibility unchanged")
+PY
+
+else
+	echo "OpenAppFilter: destan19 7.x source not detected, skip runtime compatibility patch"
+fi
 
 ### OpenAppFilter 兼容修复结果检查 ###
 
@@ -524,7 +608,7 @@ fi
 # 1. 非线性 skb 处理前增加 l4_len > 0 检查
 # 2. read_skb 增加 from / len 最终边界检查
 # 3. 网络 softirq 路径内存申请改用 GFP_ATOMIC
-# 4. 兼容 sbwml v6 的 app_filter.c 和 destan19 新版的 fwx_main.c
+# 4. 保留 sbwml v6 app_filter.c 兼容分支，当前 YAOF 默认使用 destan19 fwx_main.c
 
 OAF_SRC=""
 OAF_CAN_PATCH=1
