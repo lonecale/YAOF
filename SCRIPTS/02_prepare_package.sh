@@ -810,6 +810,107 @@ if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED
     fi
 fi
 
+### WechatPush：修复 procps-ng top 下 CPU 占用前三进程解析错误 ###
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+
+    WECHATPUSH_FILE="./package/new/luci-app-wechatpush/root/usr/share/wechatpush/wechatpush"
+
+    if [ -f "$WECHATPUSH_FILE" ]; then
+
+        if grep -Fq '# YAOF: procps-ng top3 dynamic columns minimal fix' "$WECHATPUSH_FILE"; then
+
+            echo "WechatPush CPU top3: YAOF fix already exists, skip"
+
+        elif grep -Fq 'local gettop=$(top -bn 1 | grep -v "top -bn 1" | head -n 7)' "$WECHATPUSH_FILE" \
+            && grep -Fq 'for i in $(seq 5 7); do' "$WECHATPUSH_FILE"; then
+
+            echo "WechatPush CPU top3: old parser detected, applying fix"
+
+            WECHATPUSH_TMP="$(mktemp)"
+
+            cp -p "$WECHATPUSH_FILE" "$WECHATPUSH_TMP"
+
+            cat > /tmp/wechatpush_cputop_dynamic.sed <<'SED'
+/^# CPU 占用前三[[:space:]]*$/,/^# 检测硬盘状态[[:space:]]*$/ {
+
+s@^\([[:space:]]*\)local gettop=$(top -bn 1 | grep -v "top -bn 1" | head -n 7)$@\1# YAOF: procps-ng top3 dynamic columns minimal fix\
+\1local gettop=$(LC_ALL=C top -b -n 1 -o %CPU 2>/dev/null | awk '\
+\1    $1 == "PID" {\
+\1        cpu_col = 0\
+\1        cmd_col = 0\
+\1        for (j = 1; j <= NF; j++) {\
+\1            if ($j == "%CPU" || $j == "CPU%") cpu_col = j\
+\1            if ($j == "COMMAND" || $j == "CMD") cmd_col = j\
+\1        }\
+\1        if (cpu_col > 0 \&\& cmd_col > 0) found = 1\
+\1        next\
+\1    }\
+\1    found \&\& $1 ~ /^[0-9][0-9]*$/ {\
+\1        cpu = $cpu_col\
+\1        gsub(/%/, "", cpu)\
+\1        gsub(/,/, ".", cpu)\
+\1        name = $cmd_col\
+\1        parts_count = split(name, parts, "/")\
+\1        base = parts[parts_count]\
+\1        if ((base == "sh" || base == "bash" || base == "ash") \&\& (cmd_col + 1) <= NF \&\& $(cmd_col + 1) != "") {\
+\1            name = $(cmd_col + 1)\
+\1            parts_count = split(name, parts, "/")\
+\1            base = parts[parts_count]\
+\1        }\
+\1        if ((cpu + 0) <= 0 || base == "top") next\
+\1        print cpu, name\
+\1        if (++count >= 3) exit\
+\1    }\
+\1')@
+
+s@^\([[:space:]]*\)for i in $(seq 5 7); do$@\1for i in $(seq 1 3); do@
+
+s@^\([[:space:]]*\)local top_name=.*$@\1local top_name=$(echo "${gettop}" | awk -v n="$i" 'NR==n {print $2}')@
+
+s@^\([[:space:]]*\)local top_load=.*$@\1local top_load=$(echo "${gettop}" | awk -v n="$i" 'NR==n {print $1}')\
+\1[ -z "$top_name" ] \&\& continue@
+
+s@^\([[:space:]]*\)local temp_top="${top_name} ${top_load}"$@\1local temp_top="${top_name} ${top_load}%"@
+
+}
+SED
+
+            sed -i -f /tmp/wechatpush_cputop_dynamic.sed "$WECHATPUSH_TMP"
+
+            if bash -n "$WECHATPUSH_TMP" \
+                && grep -Fq '# YAOF: procps-ng top3 dynamic columns minimal fix' "$WECHATPUSH_TMP" \
+                && ! grep -Fq 'head -n 7' "$WECHATPUSH_TMP" \
+                && ! grep -Fq 'for i in $(seq 5 7); do' "$WECHATPUSH_TMP"; then
+
+                cp -p "$WECHATPUSH_TMP" "$WECHATPUSH_FILE"
+
+                echo "WechatPush CPU top3 procps-ng fix applied"
+
+            else
+
+                echo "WARNING: WechatPush CPU top3 patch validation failed"
+                echo "WARNING: original file kept unchanged"
+
+            fi
+
+            rm -f \
+                "$WECHATPUSH_TMP" \
+                /tmp/wechatpush_cputop_dynamic.sed
+
+        else
+
+            echo "WechatPush CPU top3: source changed, review manually"
+
+        fi
+
+    else
+
+        echo "WechatPush CPU top3: source file not found, skip"
+
+    fi
+
+fi
 
 ### ZeroTier：关闭状态不执行 zerotier-fw4，并补齐 peers.d 目录 ###
 if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=y" "$SEED_FILE"; then
