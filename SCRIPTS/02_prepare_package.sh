@@ -273,8 +273,7 @@ MOSDNS_LOG_PATCH=1
 # 当前已有 ECS 会继续保留。
 #
 # 如果 sbwml 后续已经修改 ecs_handler，
-# 或已经实现 overwrite，
-# 自动跳过本地增强。
+# 自动跳过本地增强，避免和上游实现冲突。
 
 # 如果上游补丁已经修改 ecs_handler，则停止自动修改
 if grep -RqsE \
@@ -300,9 +299,7 @@ if [ "${MOSDNS_ECS_PATCH_OK}" = "1" ]; then
 	cat > "${MOSDNS_ECS_PATCH}" <<'EOF'
 --- a/plugin/executable/ecs_handler/handler.go
 +++ b/plugin/executable/ecs_handler/handler.go
-@@ -48,11 +48,12 @@ var _ sequence.RecursiveExecutable = (*ECSHandler)(nil)
- 
- type Args struct {
+@@ -46,5 +46,6 @@
 -	Forward bool   `yaml:"forward"`
 -	Send    bool   `yaml:"send"`
 -	Preset  string `yaml:"preset"`
@@ -314,16 +311,7 @@ if [ "${MOSDNS_ECS_PATCH_OK}" = "1" ]; then
 +	Preset    string `yaml:"preset"`
 +	Mask4     int    `yaml:"mask4"`
 +	Mask6     int    `yaml:"mask6"`
- }
- 
- type ECSHandler struct {
-@@ -119,12 +120,25 @@ func (e *ECSHandler) Exec(ctx context.Context, qCtx *query_context.Context, next
- 
- // AddECS adds a *dns.EDNS0_SUBNET record to q.
- func (e *ECSHandler) addECS(qCtx *query_context.Context) (forwarded bool) {
- 	queryOpt := qCtx.QOpt()
-+
- 	// Check if query already has an ecs.
+@@ -116,5 +117,17 @@
 -	for _, o := range queryOpt.Option {
 +	ecsIndex := -1
 +	for i, o := range queryOpt.Option {
@@ -331,58 +319,41 @@ if [ "${MOSDNS_ECS_PATCH_OK}" = "1" ]; then
 -			return false // skip it
 +			ecsIndex = i
 +			break
-+		}
-+	}
+ 		}
+ 	}
 +	if ecsIndex >= 0 && !e.args.Overwrite {
 +		return false // skip it
 +	}
-+
 +	setECS := func(ecs dns.EDNS0) {
 +		if ecsIndex >= 0 {
 +			queryOpt.Option[ecsIndex] = ecs
 +		} else {
 +			queryOpt.Option = append(queryOpt.Option, ecs)
- 		}
- 	}
-+
- 	if qCtx.QQuestion().Qclass != dns.ClassINET {
- 		// RFC 7871 5:
- 		// ECS is only defined for the Internet (IN) DNS class.
-@@ -136,7 +150,7 @@ func (e *ECSHandler) addECS(qCtx *query_context.Context) (forwarded bool) {
- 		if clientOpt != nil {
- 			for _, o := range clientOpt.Option {
- 				if o.Option() == dns.EDNS0SUBNET {
++		}
++	}
+@@ -131,2 +144,2 @@
 -					queryOpt.Option = append(queryOpt.Option, o)
 +					setECS(o)
  					return true
- 				}
- 			}
-@@ -151,7 +165,7 @@ func (e *ECSHandler) addECS(qCtx *query_context.Context) (forwarded bool) {
- 		} else {
- 			ecs = newSubnet(clientAddr.AsSlice(), uint8(e.args.Mask6), true)
- 		}
+@@ -145,2 +158,2 @@
 -		queryOpt.Option = append(queryOpt.Option, ecs)
 +		setECS(ecs)
  		return false
- 	}
- 
-@@ -165,7 +179,7 @@ func (e *ECSHandler) addECS(qCtx *query_context.Context) (forwarded bool) {
- 			} else {
- 				ecs = newSubnet(clientAddr.AsSlice(), uint8(e.args.Mask6), true)
- 			}
+@@ -158,2 +171,2 @@
 -			queryOpt.Option = append(queryOpt.Option, ecs)
 +			setECS(ecs)
  			return false
- 		}
- 	}
 EOF
 
 	echo "MosDNS: created ${MOSDNS_ECS_PATCH}"
 	echo "MosDNS: ecs_handler -> add optional overwrite support"
 	echo "MosDNS: ECS source priority -> forward > preset > send"
+
 else
+
 	rm -f "${MOSDNS_ECS_PATCH}"
 	echo "MosDNS: ECS overwrite enhancement not applied"
+
 fi
 
 
