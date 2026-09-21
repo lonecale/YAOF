@@ -713,11 +713,13 @@ if [ -f "${OAF_UBUS_SRC}" ]; then
 	fi
 fi
 
-### OpenAppFilter：修复异常 skb 长度导致超大内存申请 ###
+### OpenAppFilter：修复异常 skb 长度及 nonlinear skb 安全读取 ###
 # 1. 非线性 skb 处理前增加 l4_len > 0 检查
 # 2. read_skb 增加 from / len 最终边界检查
-# 3. 网络 softirq 路径内存申请改用 GFP_ATOMIC
-# 4. 保留 sbwml v6 app_filter.c 兼容分支，当前 YAOF 默认使用 destan19 fwx_main.c
+# 3. 网络 softirq 路径内存申请使用 GFP_ATOMIC
+# 4. 使用 skb_copy_bits 精确复制 len 字节，避免 skb_seq_read
+#    返回块大于目标缓冲区导致 memcpy 越界
+# 5. 保留 sbwml v6 app_filter.c 兼容分支，当前 YAOF 默认使用 destan19 fwx_main.c
 
 OAF_SRC=""
 OAF_CAN_PATCH=1
@@ -731,65 +733,83 @@ elif [ -f "./package/new/OpenAppFilter/oaf/src/app_filter.c" ]; then
 	OAF_SRC="./package/new/OpenAppFilter/oaf/src/app_filter.c"
 
 else
-	echo "OpenAppFilter: source file not found, skip safety patch"
+	echo "OpenAppFilter: source file not found, skip skb safety patch"
 	OAF_CAN_PATCH=0
 fi
 
-### 1. 修复 l4_len 负数进入 read_skb ###
+
+### 1. nonlinear skb 只处理有效 l4_len ###
 if [ "${OAF_CAN_PATCH}" = "1" ]; then
 
 	OAF_OLD_COND='if (skb_is_nonlinear(skb) && flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)'
 	OAF_NEW_COND='if (skb_is_nonlinear(skb) && flow.l4_len > 0 && flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)'
 
-	# 仍存在旧代码时全部修复
 	if grep -Fq "${OAF_OLD_COND}" "${OAF_SRC}"; then
+
 		echo "OpenAppFilter: add l4_len > 0 check"
 
 		sed -i \
 			's/if (skb_is_nonlinear(skb) && flow\.l4_len < MAX_AF_SUPPORT_DATA_LEN)/if (skb_is_nonlinear(skb) \&\& flow.l4_len > 0 \&\& flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)/g' \
 			"${OAF_SRC}"
 
-	# 已经全部采用安全条件时不重复修改
 	elif grep -Fq "${OAF_NEW_COND}" "${OAF_SRC}"; then
-		echo "OpenAppFilter: upstream already has l4_len > 0 check"
+
+		echo "OpenAppFilter: l4_len safety check already applied"
 
 	else
+
 		echo "OpenAppFilter: l4_len code structure changed, skip this patch"
+
 	fi
 fi
 
-### 2. 给 read_skb 增加最终边界检查 ###
+
+### 2. read_skb 最终边界检查 ###
 if [ "${OAF_CAN_PATCH}" = "1" ]; then
 
-	# 上游已经存在相同或等效边界检查时不重复添加
 	if grep -Fq "len > skb->len - from" "${OAF_SRC}"; then
-		echo "OpenAppFilter: upstream already has read_skb bounds check"
+
+		echo "OpenAppFilter: read_skb bounds check already applied"
 
 	else
+
 		OAF_CONSUMED_COUNT="$(grep -Ec '^[[:space:]]*unsigned int consumed = 0;' "${OAF_SRC}")"
 
 		if [ "${OAF_CONSUMED_COUNT}" -eq 1 ]; then
+
 			echo "OpenAppFilter: add read_skb bounds check"
 
-			sed -i $'/^[[:space:]]*unsigned int consumed = 0;/a\\\n\\\n\tif (!skb || !len || len > MAX_AF_SUPPORT_DATA_LEN)\\\n\t\treturn NULL;\\\n\\\n\tif (from >= skb->len || len > skb->len - from)\\\n\t\treturn NULL;' \
+			sed -i $'/^[[:space:]]*unsigned int consumed = 0;/a\
+\
+\tif (!skb || !len || len > MAX_AF_SUPPORT_DATA_LEN)\
+\t\treturn NULL;\
+\
+\tif (from >= skb->len || len > skb->len - from)\
+\t\treturn NULL;' \
 				"${OAF_SRC}"
 
 		else
+
 			echo "OpenAppFilter: read_skb structure changed, skip bounds patch"
+
 		fi
 	fi
 fi
 
-### 3. read_skb 网络 softirq 路径使用 GFP_ATOMIC ###
+
+### 3. read_skb 使用 GFP_ATOMIC ###
 if [ "${OAF_CAN_PATCH}" = "1" ]; then
 
 	if grep -Fq "msg_buf = kmalloc(len, GFP_ATOMIC);" "${OAF_SRC}"; then
-		echo "OpenAppFilter: upstream already uses GFP_ATOMIC"
+
+		echo "OpenAppFilter: read_skb already uses GFP_ATOMIC"
 
 	else
+
 		OAF_GFP_COUNT="$(grep -Fc "msg_buf = kmalloc(len, GFP_KERNEL);" "${OAF_SRC}")"
 
 		if [ "${OAF_GFP_COUNT}" -eq 1 ]; then
+
 			echo "OpenAppFilter: change read_skb GFP_KERNEL to GFP_ATOMIC"
 
 			sed -i \
@@ -797,14 +817,63 @@ if [ "${OAF_CAN_PATCH}" = "1" ]; then
 				"${OAF_SRC}"
 
 		else
+
 			echo "OpenAppFilter: kmalloc code structure changed, skip GFP patch"
+
 		fi
 	fi
 fi
 
-### OpenAppFilter 修改结果检查 ###
+
+### 4. read_skb 使用 skb_copy_bits 精确复制 ###
 if [ "${OAF_CAN_PATCH}" = "1" ]; then
-	echo "===== OpenAppFilter safety patch ====="
+
+	if grep -Fq "skb_copy_bits(skb, from, msg_buf, len)" "${OAF_SRC}"; then
+
+		echo "OpenAppFilter: read_skb skb_copy_bits fix already applied"
+
+	else
+
+		OAF_SEQ_COUNT="$(grep -Fc "skb_prepare_seq_read(skb, from, from + len, &state);" "${OAF_SRC}")"
+		OAF_UNSAFE_COPY_COUNT="$(grep -Fc "memcpy(msg_buf + consumed, ptr, avail);" "${OAF_SRC}")"
+
+		if [ "${OAF_SEQ_COUNT}" -eq 1 ] && [ "${OAF_UNSAFE_COPY_COUNT}" -eq 1 ]; then
+
+			echo "OpenAppFilter: replace unsafe skb_seq_read loop with skb_copy_bits"
+
+			sed -i \
+				'/^[[:space:]]*skb_prepare_seq_read(skb, from, from + len, &state);$/,/^[[:space:]]*return msg_buf;$/c\
+\tif (skb_copy_bits(skb, from, msg_buf, len) != 0)\
+\t{\
+\t\tkfree(msg_buf);\
+\t\treturn NULL;\
+\t}\
+\
+\treturn msg_buf;' \
+				"${OAF_SRC}"
+
+			# skb_seq_state 和 consumed 已经不再需要
+			# 仅在 read_skb 函数范围内删除，避免影响其他代码
+			sed -i \
+				'/^static unsigned char \*read_skb/,/^}/ {
+					/^[[:space:]]*struct skb_seq_state state;$/d
+					/^[[:space:]]*unsigned int consumed = 0;$/d
+				}' \
+				"${OAF_SRC}"
+
+		else
+
+			echo "OpenAppFilter: read_skb copy structure changed, skip skb_copy_bits patch"
+
+		fi
+	fi
+fi
+
+
+### OpenAppFilter skb 安全修复结果检查 ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	echo "===== OpenAppFilter skb safety patch ====="
 	echo "Source: ${OAF_SRC}"
 
 	echo "===== l4_len checks ====="
@@ -813,10 +882,69 @@ if [ "${OAF_CAN_PATCH}" = "1" ]; then
 		"${OAF_SRC}" || true
 
 	echo "===== read_skb ====="
-	grep -n -A18 \
+	grep -n -A25 \
 		"static unsigned char \*read_skb" \
 		"${OAF_SRC}" || true
+
+	echo "===== safety status ====="
+
+	# 必须存在新的安全条件，同时旧条件必须已经完全消失
+	if grep -Fq \
+		"${OAF_NEW_COND}" \
+		"${OAF_SRC}" \
+		&& ! grep -Fq \
+		"${OAF_OLD_COND}" \
+		"${OAF_SRC}"; then
+
+		echo "l4_len safety: OK"
+
+	else
+
+		echo "l4_len safety: NOT PATCHED"
+
+	fi
+
+	if grep -Fq \
+		"len > skb->len - from" \
+		"${OAF_SRC}"; then
+
+		echo "read_skb bounds: OK"
+
+	else
+
+		echo "read_skb bounds: NOT PATCHED"
+
+	fi
+
+	if grep -Fq \
+		"msg_buf = kmalloc(len, GFP_ATOMIC);" \
+		"${OAF_SRC}"; then
+
+		echo "read_skb GFP_ATOMIC: OK"
+
+	else
+
+		echo "read_skb GFP_ATOMIC: NOT PATCHED"
+
+	fi
+
+	# 必须已经使用 skb_copy_bits，同时旧危险 memcpy 必须完全消失
+	if grep -Fq \
+		"skb_copy_bits(skb, from, msg_buf, len)" \
+		"${OAF_SRC}" \
+		&& ! grep -Fq \
+		"memcpy(msg_buf + consumed, ptr, avail);" \
+		"${OAF_SRC}"; then
+
+		echo "read_skb exact copy: OK"
+
+	else
+
+		echo "read_skb exact copy: NOT PATCHED"
+
+	fi
 fi
+
 
 # 添加自定义第三方包
 # OpenWrt-Custom 由 01_get_ready.sh 克隆生成
