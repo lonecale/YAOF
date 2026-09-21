@@ -612,7 +612,8 @@ fi
 # 1. /usr/bin/oaf_rule 不存在时不执行 legacy reload
 # 2. fwx_agent 不存在时不执行可选 forward
 #
-# 上游以后修复相应代码后，本补丁自动跳过。
+# 仅在当前已确认的旧代码结构存在时修改。
+# 上游以后修复或代码结构变化时自动跳过。
 
 OAF_DESTAN_ROOT="./package/new/OpenAppFilter/open-app-filter"
 OAF_UBUS_SRC="${OAF_DESTAN_ROOT}/src/fwx_ubus.c"
@@ -620,97 +621,192 @@ OAF_RULE_MANAGER="${OAF_DESTAN_ROOT}/files/rule_manager.lua"
 
 if [ -f "${OAF_UBUS_SRC}" ] && [ -f "${OAF_RULE_MANAGER}" ]; then
 
-	OAF_UBUS_SRC="${OAF_UBUS_SRC}" python3 <<'PY'
-import os
-from pathlib import Path
-
-path = Path(os.environ["OAF_UBUS_SRC"])
-text = path.read_text(encoding="utf-8")
-original = text
+	OAF_RUNTIME_PATCHED=0
 
 
-# ============================================================
-# 1. legacy /usr/bin/oaf_rule
-# ============================================================
+	### 3.1 legacy /usr/bin/oaf_rule ###
+	if grep -Fq 'if (access("/usr/bin/oaf_rule", X_OK) == 0)' "${OAF_UBUS_SRC}"; then
 
-old_oaf_rule = '''void reload_oaf_rule(){
-    system("/usr/bin/oaf_rule reload");
-}'''
+		echo "OpenAppFilter: oaf_rule guard already applied"
 
-new_oaf_rule = '''void reload_oaf_rule(){
-    if (access("/usr/bin/oaf_rule", X_OK) == 0)
+	else
+
+		OAF_RULE_FUNC_COUNT="$(grep -Fc 'void reload_oaf_rule(){' "${OAF_UBUS_SRC}")"
+		OAF_RULE_OLD_COUNT="$(grep -Fc 'system("/usr/bin/oaf_rule reload");' "${OAF_UBUS_SRC}")"
+
+		if [ "${OAF_RULE_FUNC_COUNT}" -eq 1 ] && [ "${OAF_RULE_OLD_COUNT}" -eq 1 ]; then
+
+			sed -i \
+				'/^void reload_oaf_rule(){$/,/^}$/ {
+					/^[[:space:]]*system("\/usr\/bin\/oaf_rule reload");$/c\
+    if (access("/usr/bin/oaf_rule", X_OK) == 0)\
         system("/usr/bin/oaf_rule reload");
-}'''
+				}' \
+				"${OAF_UBUS_SRC}"
 
-if old_oaf_rule in text:
-    text = text.replace(old_oaf_rule, new_oaf_rule, 1)
-    print("OpenAppFilter: guard legacy oaf_rule reload")
-elif new_oaf_rule in text:
-    print("OpenAppFilter: oaf_rule guard already applied")
-else:
-    print("OpenAppFilter: oaf_rule implementation changed upstream, skip")
+			if grep -Fq 'if (access("/usr/bin/oaf_rule", X_OK) == 0)' "${OAF_UBUS_SRC}"; then
+
+				echo "OpenAppFilter: guard legacy oaf_rule reload"
+				OAF_RUNTIME_PATCHED=1
+
+			else
+
+				echo "OpenAppFilter: oaf_rule guard patch failed"
+
+			fi
+
+		else
+
+			echo "OpenAppFilter: oaf_rule implementation changed upstream, skip"
+
+		fi
+	fi
 
 
-# ============================================================
-# 2. optional fwx_agent
-# ============================================================
+	### 3.2 optional fwx_agent ###
+	if grep -Fq 'ubus_lookup_id(ubus_ctx, "fwx_agent"' "${OAF_UBUS_SRC}"; then
 
-old_agent = '''static void fwx_forward_to_agent(struct json_object *req_obj) {
-\tchar *cmd_buf = NULL;
-\tif (!req_obj)
-\t\treturn;'''
+		echo "OpenAppFilter: fwx_agent guard already applied"
 
-new_agent = '''static void fwx_forward_to_agent(struct json_object *req_obj) {
-\tchar *cmd_buf = NULL;
-\tuint32_t agent_id = 0;
+	else
 
-\tif (!req_obj || !ubus_ctx)
+		OAF_AGENT_FUNC_COUNT="$(grep -Fc 'static void fwx_forward_to_agent(struct json_object *req_obj) {' "${OAF_UBUS_SRC}")"
+		OAF_AGENT_CMD_COUNT="$(grep -Fc $'\tchar *cmd_buf = NULL;' "${OAF_UBUS_SRC}")"
+		OAF_AGENT_OLD_COUNT="$(grep -Fc $'\tif (!req_obj)' "${OAF_UBUS_SRC}")"
+
+		if [ "${OAF_AGENT_FUNC_COUNT}" -eq 1 ] \
+			&& [ "${OAF_AGENT_CMD_COUNT}" -eq 1 ] \
+			&& [ "${OAF_AGENT_OLD_COUNT}" -eq 1 ] \
+			&& grep -Fq 'ubus -t 2 call fwx_agent forward' "${OAF_UBUS_SRC}"; then
+
+			sed -i \
+				'/^static void fwx_forward_to_agent(struct json_object \*req_obj) {$/,/^}$/ {
+					/^[[:space:]]*char \*cmd_buf = NULL;$/,/^[[:space:]]*return;$/c\
+\tchar *cmd_buf = NULL;\
+\tuint32_t agent_id = 0;\
+\
+\tif (!req_obj || !ubus_ctx)\
+\t\treturn;\
+\
+\tif (ubus_lookup_id(ubus_ctx, "fwx_agent", \&agent_id) != 0)\
 \t\treturn;
+				}' \
+				"${OAF_UBUS_SRC}"
 
-\tif (ubus_lookup_id(ubus_ctx, "fwx_agent", &agent_id) != 0)
-\t\treturn;'''
+			if grep -Fq 'ubus_lookup_id(ubus_ctx, "fwx_agent"' "${OAF_UBUS_SRC}"; then
 
-if 'ubus_lookup_id(ubus_ctx, "fwx_agent"' in text:
-    print("OpenAppFilter: fwx_agent guard already applied")
-elif old_agent in text:
-    text = text.replace(old_agent, new_agent, 1)
-    print("OpenAppFilter: guard optional fwx_agent forwarding")
-elif 'ubus -t 2 call fwx_agent forward' not in text:
-    print("OpenAppFilter: fwx_agent forwarding changed upstream, skip")
-else:
-    print("OpenAppFilter: fwx_agent function structure changed upstream, skip")
+				echo "OpenAppFilter: guard optional fwx_agent forwarding"
+				OAF_RUNTIME_PATCHED=1
+
+			else
+
+				echo "OpenAppFilter: fwx_agent guard patch failed"
+
+			fi
+
+		elif ! grep -Fq 'ubus -t 2 call fwx_agent forward' "${OAF_UBUS_SRC}"; then
+
+			echo "OpenAppFilter: fwx_agent forwarding changed upstream, skip"
+
+		else
+
+			echo "OpenAppFilter: fwx_agent function structure changed upstream, skip"
+
+		fi
+	fi
 
 
-if text != original:
-    path.write_text(text, encoding="utf-8")
-    print("OpenAppFilter: runtime compatibility patched")
-else:
-    print("OpenAppFilter: runtime compatibility unchanged")
-PY
+	if [ "${OAF_RUNTIME_PATCHED}" -eq 1 ]; then
+
+		echo "OpenAppFilter: runtime compatibility patched"
+
+	else
+
+		echo "OpenAppFilter: runtime compatibility unchanged"
+
+	fi
 
 else
+
 	echo "OpenAppFilter: destan19 7.x source not detected, skip runtime compatibility patch"
+
 fi
+
 
 ### OpenAppFilter 兼容修复结果检查 ###
 
 echo "===== OpenAppFilter YAOF compatibility patch ====="
 
+
+### KuCat Dashboard ###
 if [ -f "${OAF_DASHBOARD}" ]; then
-	if grep -Fq "localStorage.setItem('luci-menu-category', 'basic');" "${OAF_DASHBOARD}"; then
+
+	if grep -Fq \
+		"localStorage.setItem('luci-menu-category', 'basic');" \
+		"${OAF_DASHBOARD}"; then
+
 		echo "KuCat menu compatibility: NOT PATCHED"
+
 	else
+
 		echo "KuCat menu compatibility: OK"
+
 	fi
 fi
 
+
+### oafd procps-ng top ###
 if [ -f "${OAF_UBUS_SRC}" ]; then
+
 	if grep -Fq "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}"; then
+
 		echo "oafd top compatibility: OK"
 		grep -n -F "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}" || true
+
 	else
+
 		echo "oafd top compatibility: upstream changed or patch skipped"
+
 	fi
+
+
+	### legacy oaf_rule ###
+	echo "===== reload_oaf_rule ====="
+	grep -n -A4 \
+		'^void reload_oaf_rule(){' \
+		"${OAF_UBUS_SRC}" || true
+
+	if grep -Fq \
+		'if (access("/usr/bin/oaf_rule", X_OK) == 0)' \
+		"${OAF_UBUS_SRC}"; then
+
+		echo "oaf_rule guard: OK"
+
+	else
+
+		echo "oaf_rule guard: NOT PATCHED"
+
+	fi
+
+
+	### optional fwx_agent ###
+	echo "===== fwx_forward_to_agent ====="
+	grep -n -A18 \
+		'^static void fwx_forward_to_agent(struct json_object \*req_obj) {' \
+		"${OAF_UBUS_SRC}" || true
+
+	if grep -Fq \
+		'ubus_lookup_id(ubus_ctx, "fwx_agent"' \
+		"${OAF_UBUS_SRC}"; then
+
+		echo "fwx_agent guard: OK"
+
+	else
+
+		echo "fwx_agent guard: NOT PATCHED"
+
+	fi
+
 fi
 
 ### OpenAppFilter：修复异常 skb 长度及 nonlinear skb 安全读取 ###
