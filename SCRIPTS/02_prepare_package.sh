@@ -554,57 +554,210 @@ else
 fi
 
 
-### 2. 修复 oafd 后台调用 top 报错及多核 CPU 解析兼容 ###
-# 原代码：
-# top -n 1 | grep 'CPU:' ...
+### 2. 修复 oafd CPU 使用率统计 ###
+# 上游通过 top -n 1 解析 CPU idle：
+# 1. procd 后台运行时可能出现 top: failed tty get
+# 2. BusyBox / procps-ng top 输出格式不同
+# 3. procps-ng 首帧 CPU 数据波动较大，可能出现明显异常瞬时值
 #
-# 在 当前 procps-ng 环境存在两个问题：
-#
-# 1. oafd 由 procd 后台运行，没有 TTY，
-#    top -n 1 会持续输出：
-#    top: failed tty get
-#
-# 2. procps-ng 多核 CPU 输出为：
-#    %Cpu0
-#    %Cpu1
-#    ...
-#    原来的 grep 'CPU:' 无法正确取得 idle。
-#
-# 已在实际运行环境验证：
-# 使用 top -b -n 1 后无 TTY 报错消失，
-# 自动定位每个 %Cpu 行的 id 字段，读取其前一列 idle 数值并求平均，
-# 可继续兼容上游现有的：
-# cpu_usage = 100 - atoi(result);
-#
-# 仅在当前已确认的问题代码精确出现 1 次时修改。
-# 如果上游已经修复或实现发生变化，则自动跳过。
+# 改为直接读取 Linux /proc/stat 汇总 cpu 行：
+# 第一次读取累计 CPU 时间 -> 等待 500ms -> 第二次读取 -> 计算区间 CPU 使用率
 
 if [ -f "${OAF_UBUS_SRC}" ]; then
 
+	OAF_CPU_FUNC='static int get_cpu_usage_proc_stat(void)'
+	OAF_CPU_CALL='int cpu_usage = get_cpu_usage_proc_stat();'
+	OAF_CPU_ANCHOR='static struct json_object *get_dashboard_system_status(void) {'
 	OAF_CPU_OLD="top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'"
-	OAF_CPU_NEW="LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print s/n; else print 100}'"
 
-	OAF_CPU_OLD_COUNT="$(grep -Fc "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}")"
+	if grep -Fq "${OAF_CPU_FUNC}" "${OAF_UBUS_SRC}" \
+		&& grep -Fq "${OAF_CPU_CALL}" "${OAF_UBUS_SRC}"; then
 
-	if [ "${OAF_CPU_OLD_COUNT}" -eq 1 ]; then
-		echo "OpenAppFilter: fix oafd procps-ng top compatibility"
-
-		sed -i \
-			"s@top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'@LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print s/n; else print 100}'@" \
-			"${OAF_UBUS_SRC}"
-
-	elif grep -Fq "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}"; then
-		echo "OpenAppFilter: oafd top compatibility fix already applied"
-
-	elif [ "${OAF_CPU_OLD_COUNT}" -eq 0 ]; then
-		echo "OpenAppFilter: CPU target code not found or already changed, skip"
+		echo "OpenAppFilter: /proc/stat CPU usage fix already applied"
 
 	else
-		echo "OpenAppFilter: unexpected CPU command count ${OAF_CPU_OLD_COUNT}, skip"
+
+		OAF_CPU_FUNC_COUNT="$(grep -Fc "${OAF_CPU_FUNC}" "${OAF_UBUS_SRC}")"
+		OAF_CPU_CALL_COUNT="$(grep -Fc "${OAF_CPU_CALL}" "${OAF_UBUS_SRC}")"
+		OAF_CPU_ANCHOR_COUNT="$(grep -Fc "${OAF_CPU_ANCHOR}" "${OAF_UBUS_SRC}")"
+		OAF_CPU_OLD_COUNT="$(grep -Fc "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}")"
+		OAF_CPU_TARGET_COUNT="$(grep -Ec '^[[:space:]]*int cpu_usage = 0;[[:space:]]*$' "${OAF_UBUS_SRC}")"
+		OAF_CPU_JSON_COUNT="$(grep -Fc 'json_object_object_add(system_status, "cpu", json_object_new_string(buf));' "${OAF_UBUS_SRC}")"
+
+		if [ "${OAF_CPU_FUNC_COUNT}" -eq 0 ] \
+			&& [ "${OAF_CPU_CALL_COUNT}" -eq 0 ] \
+			&& [ "${OAF_CPU_ANCHOR_COUNT}" -eq 1 ] \
+			&& [ "${OAF_CPU_OLD_COUNT}" -eq 1 ] \
+			&& [ "${OAF_CPU_TARGET_COUNT}" -eq 1 ] \
+			&& [ "${OAF_CPU_JSON_COUNT}" -eq 1 ]; then
+
+			echo "OpenAppFilter: replace top CPU parsing with /proc/stat sampling"
+
+			OAF_CPU_BACKUP="$(mktemp)"
+			OAF_CPU_TMP="$(mktemp)"
+			OAF_CPU_HELPER="$(mktemp)"
+
+			cp -p "${OAF_UBUS_SRC}" "${OAF_CPU_BACKUP}"
+
+			# fwx_ubus.c 当前未显式包含 stdio.h，按需补充
+			if ! grep -Fq '#include <stdio.h>' "${OAF_UBUS_SRC}"; then
+				sed -i \
+					'/^#include <stdlib.h>$/a#include <stdio.h>' \
+					"${OAF_UBUS_SRC}"
+			fi
+			
+			cat > "${OAF_CPU_HELPER}" <<'EOF'
+static int get_cpu_usage_proc_stat(void)
+{
+	FILE *fp;
+	unsigned long long user1 = 0, nice1 = 0, system1 = 0, idle1 = 0;
+	unsigned long long iowait1 = 0, irq1 = 0, softirq1 = 0, steal1 = 0;
+	unsigned long long user2 = 0, nice2 = 0, system2 = 0, idle2 = 0;
+	unsigned long long iowait2 = 0, irq2 = 0, softirq2 = 0, steal2 = 0;
+	unsigned long long total1, total2, total_delta, idle_delta;
+
+	fp = fopen("/proc/stat", "r");
+	if (!fp)
+		return 0;
+
+	if (fscanf(fp, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+		   &user1, &nice1, &system1, &idle1,
+		   &iowait1, &irq1, &softirq1, &steal1) != 8) {
+		fclose(fp);
+		return 0;
+	}
+
+	fclose(fp);
+
+	usleep(500000);
+
+	fp = fopen("/proc/stat", "r");
+	if (!fp)
+		return 0;
+
+	if (fscanf(fp, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+		   &user2, &nice2, &system2, &idle2,
+		   &iowait2, &irq2, &softirq2, &steal2) != 8) {
+		fclose(fp);
+		return 0;
+	}
+
+	fclose(fp);
+
+	total1 = user1 + nice1 + system1 + idle1 +
+		 iowait1 + irq1 + softirq1 + steal1;
+
+	total2 = user2 + nice2 + system2 + idle2 +
+		 iowait2 + irq2 + softirq2 + steal2;
+
+	if (total2 <= total1 || idle2 < idle1)
+		return 0;
+
+	total_delta = total2 - total1;
+	idle_delta = idle2 - idle1;
+
+	if (idle_delta > total_delta)
+		return 0;
+
+	return (int)((100ULL * (total_delta - idle_delta) +
+		      total_delta / 2) / total_delta);
+}
+
+EOF
+
+			# 在 get_dashboard_system_status() 前插入 CPU 读取函数
+			awk -v insert_file="${OAF_CPU_HELPER}" '
+				$0 == "static struct json_object *get_dashboard_system_status(void) {" && !inserted {
+					while ((getline line < insert_file) > 0)
+						print line
+					close(insert_file)
+					inserted = 1
+				}
+				{ print }
+			' "${OAF_UBUS_SRC}" > "${OAF_CPU_TMP}"
+
+			cat "${OAF_CPU_TMP}" > "${OAF_UBUS_SRC}"
+
+			# 定位原 CPU 统计代码
+			OAF_CPU_INT_LINE="$(grep -nE \
+				'^[[:space:]]*int cpu_usage = 0;[[:space:]]*$' \
+				"${OAF_UBUS_SRC}" | cut -d: -f1)"
+
+			OAF_CPU_START_LINE="${OAF_CPU_INT_LINE}"
+
+			if [ -n "${OAF_CPU_INT_LINE}" ]; then
+
+				OAF_CPU_PREV_LINE=$((OAF_CPU_INT_LINE - 1))
+
+				if sed -n "${OAF_CPU_PREV_LINE}p" "${OAF_UBUS_SRC}" \
+					| grep -Eq \
+					'^[[:space:]]*memset\(result, 0, sizeof\(result\)\);[[:space:]]*$'; then
+
+					OAF_CPU_START_LINE="${OAF_CPU_PREV_LINE}"
+				fi
+			fi
+
+			OAF_CPU_END_LINE="$(awk -v start="${OAF_CPU_INT_LINE}" '
+				NR > start &&
+				/^[[:space:]]*snprintf\(buf, sizeof\(buf\), "%d", cpu_usage\);[[:space:]]*$/ {
+					print NR
+					exit
+				}
+			' "${OAF_UBUS_SRC}")"
+
+			if [ -n "${OAF_CPU_START_LINE}" ] \
+				&& [ -n "${OAF_CPU_END_LINE}" ]; then
+
+				sed -i \
+					"${OAF_CPU_START_LINE},${OAF_CPU_END_LINE}c\\
+    int cpu_usage = get_cpu_usage_proc_stat();\\
+\\
+    snprintf(buf, sizeof(buf), \"%d\", cpu_usage);" \
+					"${OAF_UBUS_SRC}"
+			fi
+
+			# 最终检查：
+			# 1. 新函数只能存在 1 次
+			# 2. 新调用只能存在 1 次
+			# 3. 500ms 采样存在
+			# 4. 上游旧 top CPU 命令消失
+			if [ "$(grep -Fc "${OAF_CPU_FUNC}" "${OAF_UBUS_SRC}")" -eq 1 ] \
+				&& [ "$(grep -Fc "${OAF_CPU_CALL}" "${OAF_UBUS_SRC}")" -eq 1 ] \
+				&& [ "$(grep -Fc 'usleep(500000);' "${OAF_UBUS_SRC}")" -eq 1 ] \
+				&& grep -Fq '#include <stdio.h>' "${OAF_UBUS_SRC}" \
+				&& ! grep -Fq "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}"; then
+
+				echo "OpenAppFilter: /proc/stat CPU usage fix applied"
+
+			else
+
+				echo "WARNING: OpenAppFilter /proc/stat CPU patch validation failed"
+				echo "WARNING: original fwx_ubus.c restored"
+
+				cat "${OAF_CPU_BACKUP}" > "${OAF_UBUS_SRC}"
+			fi
+
+			rm -f \
+				"${OAF_CPU_BACKUP}" \
+				"${OAF_CPU_TMP}" \
+				"${OAF_CPU_HELPER}"
+
+		elif [ "${OAF_CPU_OLD_COUNT}" -eq 0 ]; then
+
+			echo "OpenAppFilter: upstream CPU implementation changed, skip /proc/stat fix"
+
+		else
+
+			echo "OpenAppFilter: CPU source structure unexpected, skip /proc/stat fix"
+			echo "OpenAppFilter: old=${OAF_CPU_OLD_COUNT} anchor=${OAF_CPU_ANCHOR_COUNT} target=${OAF_CPU_TARGET_COUNT} json=${OAF_CPU_JSON_COUNT}"
+
+		fi
 	fi
 
 else
-	echo "OpenAppFilter: fwx_ubus.c not found, skip CPU compatibility fix"
+
+	echo "OpenAppFilter: fwx_ubus.c not found, skip CPU usage fix"
+
 fi
 
 ### 3. destan19 OpenAppFilter 7.x：运行时兼容修复 ###
@@ -755,17 +908,34 @@ if [ -f "${OAF_DASHBOARD}" ]; then
 fi
 
 
-### oafd procps-ng top ###
+### oafd CPU /proc/stat ###
 if [ -f "${OAF_UBUS_SRC}" ]; then
 
-	if grep -Fq "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}"; then
+	if grep -Fq \
+		'static int get_cpu_usage_proc_stat(void)' \
+		"${OAF_UBUS_SRC}" \
+		&& grep -Fq \
+		'int cpu_usage = get_cpu_usage_proc_stat();' \
+		"${OAF_UBUS_SRC}" \
+		&& grep -Fq \
+		'usleep(500000);' \
+		"${OAF_UBUS_SRC}"; then
 
-		echo "oafd top compatibility: OK"
-		grep -n -F "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}" || true
+		echo "oafd CPU /proc/stat: OK"
+
+		echo "===== get_cpu_usage_proc_stat ====="
+		grep -n -A55 \
+			'^static int get_cpu_usage_proc_stat(void)$' \
+			"${OAF_UBUS_SRC}" || true
+
+		echo "===== dashboard CPU call ====="
+		grep -n -A4 -B2 \
+			'int cpu_usage = get_cpu_usage_proc_stat();' \
+			"${OAF_UBUS_SRC}" || true
 
 	else
 
-		echo "oafd top compatibility: upstream changed or patch skipped"
+		echo "oafd CPU /proc/stat: NOT PATCHED"
 
 	fi
 
