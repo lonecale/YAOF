@@ -1,8 +1,8 @@
 # Shortcut-FE v2 (SFE v2) 通用移植指南
 
-本目录包含高通 Shortcut-FE v2（基于 QSDK 14.0，commit: `56ba014`）针对通用平台（x86/ARM/MIPS）与标准 Linux 内核（5.15 ~ 6.12）的移植包与相关文档。
+本目录包含高通 Shortcut-FE v2（基于 QSDK 14.0，`NHSS.QSDK.14.0.r1-00011-O`）针对通用平台（x86/ARM/MIPS）与标准 Linux 内核（5.15 ~ 6.12）的移植包与相关文档。
 
-不依赖 NSS、PPE 或任何高通专用硬件芯片，完全在 CPU 上通过软件快速路径转发。
+不依赖 NSS、PPE 或任何高通专用硬件芯片，完全在 CPU 上通过纯软件快速路径转发，**零内核补丁依赖**。
 
 ---
 
@@ -10,42 +10,45 @@
 
 ```text
 PATCH/sfe-v2/
-├── package/             # OpenWrt 源码包（可直接拷入 package/ 或 feeds）
-│   ├── Makefile         # 编译规则，生成并通过 AUTOLOAD 自动加载 kmod-shortcut-fe 与 kmod-shortcut-fe-cm
-│   ├── patches/         # 单一最简兼容补丁（001-openwrt-generic-compat.patch）
-│   ├── src/             # 连接管理器与兼容层源码
-│   │   ├── sfe_cm.c     # 简化版控制面（负责 conntrack 同步与规则下发）
+├── package/             # OpenWrt 源码包（提供 kmod-shortcut-fe 与 kmod-shortcut-fe-cm）
+│   ├── Makefile         # 编译规则，集成防火墙配置与 ucitrack 联动
+│   ├── patches/         # 单一兼容补丁（001-openwrt-generic-compat.patch）
+│   ├── src/             # 连接管理器、兼容层与桩头文件
+│   │   ├── sfe_cm.c     # 控制面（conntrack 同步、时钟嘀嗒续期、规则下发）
 │   │   ├── sfe_cm.h
-│   │   └── sfe_compat.h # 内核跨版本（5.15 - 6.12）通用兼容垫片
-│   └── files/           # 运行时辅助服务
-│       └── etc/init.d/shortcut-fe # 极简启停与 conntrack 参数配置脚本
-├── kernel-patches/      # 内核补丁（可选性能增强）
-│   └── 6.12/
-│       ├── 999-optional-dev-fast-xmit-optimization.patch
-│       └── README.md
+│   │   ├── sfe_compat.h # 通用内核兼容层与模块内联 dev_fast_xmit
+│   │   ├── asm/unaligned.h
+│   │   └── linux/       # debug_mem_usage.h / if_trustsec.h
+│   └── files/           # 运行时服务与工具
+│       ├── etc/init.d/shortcut-fe             # 防火墙按需启停脚本
+│       ├── usr/bin/sfe_dump                  # 状态与统计导出工具
+│       └── usr/share/ucitrack/shortcut-fe.json # LuCI 防火墙热重载配置
 └── README.md            # 本文件
 ```
 
 ---
 
-## 2. 补丁精简说明（为什么只有 1 个 Patch）
+## 2. 补丁与设计精简说明
 
-原版 QSDK SFE 针对高通私有内核设计，移植到通用内核只需解决三件事：
-1. 关掉 `-Werror` 避免不同编译器阻断构建；
-2. 剔除高通专有硬件（PPE）和私有内核驱动（`sfe_pppoe_mgr`）；
-3. 注入跨内核版本的 API 垫片。
+原版 QSDK SFE 针对高通私有内核及 NSS 硬件设计，移植到通用内核只需解决通用兼容与控制面挂接：
 
-因此我们将补丁收拢为单个 `001-openwrt-generic-compat.patch`（198 行）：
-
+### 单一补丁（`001-openwrt-generic-compat.patch`）
 * **Makefile**：
-  * 去除 `-Werror`；
-  * 去除依赖私有内核导出的 `sfe_pppoe_mgr.o`；
+  * 去除 `-Werror`，去除依赖私有内核导出的 `sfe_pppoe_mgr.o`；
   * 添加 `shortcut-fe-cm.o` 一同编译；
-  * 编译参数加入 `-include $(src)/sfe_compat.h`。通过预包含头文件，所有函数签名变更（如 Linux 6.12 的 `ip_route_output` 新增 scope 参数）全部在垫片中重写，上游业务代码零修改。
-* **sfe.c**：
-  * 原版 `extern bool fast_tc_filter;` 依赖高通私有内核定义，补丁中改为本地变量 `bool fast_tc_filter = false;`。
+  * 编译参数加入 `-include $(src)/sfe_compat.h`。通过预包含头文件与 `-I$(src)`，Linux 6.11+ 的 `asm/unaligned.h` 移除及内核函数签名变更全部在垫片中处理，上游业务代码零修改。
+* **双模 Ingress 接收钩子**：
+  * 在 `sfe.c` 初始化时动态探测 `athrs_fast_nat_recv`。若内核有相关补丁则挂接函数指针获得极致性能；若为通用内核，则自动回退至 Netfilter `NF_INET_PRE_ROUTING`（优先级 `NF_IP_PRI_FIRST` / `NF_IP6_PRI_FIRST`），做到全平台通用且开箱即用。
 * **数据面（sfe_ipv4_*.c / sfe_ipv6_*.c）**：
-  * 原生代码直接访问了 `xmit_dev->offload_ops`（PPE 芯片的硬件加速虚表），标准内核的 `struct net_device` 根本没有此成员，补丁用 `#ifdef CONFIG_NF_FLOW_COOKIE` 隔离开。
+  * 彻底剔除访问 PPE 硬件虚表（`xmit_dev->offload_ops`）的私有代码，纯软直发。
+
+### 模块内联 `dev_fast_xmit`（免内核补丁直通网卡）
+在 `sfe_compat.h` 中直接实现 `dev_fast_xmit`：
+* 发包时尝试获取网卡硬件 TX 队列自旋锁，直接调用驱动 `netdev_start_xmit`，绕过 Linux qdisc 队列调度层实现零额外开销线速转发。
+* 若 TX 队列繁忙或停止，安全返回 `false`，SFE 会平滑回退至内核标准 `dev_queue_xmit` 发送。
+
+### Conntrack 平滑续期机制
+SFE 快速转发绕过了 Netfilter 慢速路径。`sfe_cm.c` 在批量同步回调（`sfe_cm_v2_ipv4_sync_many_callback`）中提取 SFE 回传的时钟增量 `inc_ticks`，在同步规则时累加刷新 `ct->timeout`，彻底避免大流量持续长连接被 Linux conntrack GC 超时误杀。
 
 ---
 
@@ -69,31 +72,21 @@ SFE v2 数据面（`sfe_pppoe.c`、`sfe_ipv4_tcp.c` 等）原生支持 PPPoE 解
 
 ## 4. 运行时使用与排查
 
-### 加载与启用
+### 防火墙与 LuCI 集成
+* **LuCI 界面**：“网络” -> “防火墙” -> “常规设置” 中，分流模式选择 `Shortcut-FE v2 flow offloading` 并保存应用。
+* **按需加载与热重载**：模块取消了开机自动盲载。通过 `ucitrack` 联动，当防火墙配置启用 `shortcut_fe` 时自动 `modprobe` 对应模块，禁用时自动 `rmmod` 卸载。
+
+### 命令行排查
 ```bash
-# 启动服务
+# 手动控制服务
 /etc/init.d/shortcut-fe start
+/etc/init.d/shortcut-fe stop
 
-# 查看内核模块是否加载
-lsmod | grep shortcut_fe
-# 应看到 qca_nss_sfe 和 shortcut_fe_cm
+# 查看运行状态与连接统计
+/usr/bin/sfe_dump
+/usr/bin/sfe_dump ipv4
+/usr/bin/sfe_dump ipv6
+
+# 查看模块加载
+lsmod | grep shortcut
 ```
-
-### 调试与统计
-```bash
-# 查看快速转发引擎统计（发包数、丢包数、PPPoE 封装/解封装数等）
-cat /sys/sfe/debug_dev/ipv4_stats
-cat /sys/sfe/debug_dev/ipv6_stats
-
-# 查看连接管理器异常计数（若有连接未被加速可在此排查）
-cat /sys/sfe_cm/exceptions
-```
-
----
-
-## 5. 内核补丁说明
-
-* **默认无需打内核补丁**：
-  在标准 Linux 6.12 内核上，所有必要依赖（路由、conntrack、`dev_fill_forward_path`）均已具备，SFE v2 可直接作为外部内核模块编译加载。
-* **可选补丁（`kernel-patches/6.12/`）**：
-  提供了一个可选的 `dev_fast_xmit` 补丁。作用是在发包时尝试获取网卡硬件发送锁并直接调用驱动的 `ndo_start_xmit`，跳过 Linux qdisc 队列调度。如果不打该补丁，`sfe_compat.h` 会自动回退调用标准的 `dev_queue_xmit`，完全不影响功能与稳定性。

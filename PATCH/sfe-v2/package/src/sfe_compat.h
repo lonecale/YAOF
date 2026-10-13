@@ -150,6 +150,7 @@ static inline bool dev_fast_xmit(struct sk_buff *skb,
 	if (likely(txq->xmit_lock_owner != cpu)) {
 		HARD_TX_LOCK(dev, txq, cpu);
 		if (likely(!netif_xmit_stopped(txq))) {
+			skb->dev = dev;
 			rc = netdev_start_xmit(skb, dev, txq, 0);
 			if (unlikely(!dev_xmit_complete(rc))) {
 				HARD_TX_UNLOCK(dev, txq);

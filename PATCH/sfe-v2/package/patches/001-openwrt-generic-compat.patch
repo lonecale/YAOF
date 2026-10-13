@@ -112,7 +112,7 @@ index 66c6187..f6a0ca3 100644
 -	RCU_INIT_POINTER(athrs_fast_nat_recv, NULL);
 +	if (sfe_fast_nat_recv_p) {
 +		RCU_INIT_POINTER(*sfe_fast_nat_recv_p, NULL);
-+		symbol_put_addr(sfe_fast_nat_recv_p);
++		synchronize_rcu();
 +		sfe_fast_nat_recv_p = NULL;
 +	} else {
 +		nf_unregister_net_hooks(&init_net, sfe_prerouting_ops, ARRAY_SIZE(sfe_prerouting_ops));

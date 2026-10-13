@@ -764,14 +764,16 @@ static int sfe_cm_conntrack_event(unsigned int events, const struct nf_ct_event 
 {
 #endif
 	struct sfe_connection_destroy sid;
-	struct nf_conn *ct = item->ct;
+	struct nf_conn *ct;
 	struct nf_conntrack_tuple orig_tuple;
-
-	if (unlikely(!ct))
-		return NOTIFY_DONE;
 
 	if (unlikely(!(events & (1 << IPCT_DESTROY))))
 		return NOTIFY_DONE;
+
+	if (unlikely(!item || !item->ct))
+		return NOTIFY_DONE;
+
+	ct = item->ct;
 
 	orig_tuple = ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple;
 	sid.protocol = orig_tuple.dst.protonum;
@@ -938,6 +940,8 @@ static void __exit sfe_cm_exit(void)
 	if (sfe_v6_ctx)
 		sfe_ipv6_notify_unregister();
 #endif
+
+	synchronize_rcu();
 }
 
 module_init(sfe_cm_init);
