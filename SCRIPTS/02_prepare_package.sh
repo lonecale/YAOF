@@ -8,6 +8,38 @@ sed -i 's/Os/O2/g' include/target.mk
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
+### ZRAM：补充 lzo-rle 并设为 LuCI 默认算法 ###
+LUCI_SYSTEM_JS="./feeds/luci/modules/luci-mod-system/htdocs/luci-static/resources/view/system/system.js"
+
+if [ -f "$LUCI_SYSTEM_JS" ]; then
+
+    if grep -Fq "o.value('lzo-rle', 'lzo-rle');" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: upstream already provides lzo-rle, skip adding option"
+    elif grep -Fq "o.value('lzo', 'lzo');" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: add lzo-rle option"
+        sed -i "/o.value('lzo', 'lzo');/{h;s/o.value('lzo', 'lzo');/o.value('lzo-rle', 'lzo-rle');/;p;g;}" \
+            "$LUCI_SYSTEM_JS"
+    else
+        echo "ZRAM LuCI: lzo option pattern changed, skip adding lzo-rle"
+    fi
+
+    if grep -Fq "o.default     = 'lzo-rle';" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: default already lzo-rle, skip changing default"
+    elif grep -Fq "o.default     = 'lzo';" "$LUCI_SYSTEM_JS"; then
+        echo "ZRAM LuCI: change default from lzo to lzo-rle"
+        sed -i "s/o.default     = 'lzo';/o.default     = 'lzo-rle';/" \
+            "$LUCI_SYSTEM_JS"
+    else
+        echo "ZRAM LuCI: default algorithm pattern changed, skip changing default"
+    fi
+
+    echo "===== ZRAM LuCI config ====="
+    grep -n -A8 -B2 "zram_comp_algo" "$LUCI_SYSTEM_JS" || true
+
+else
+    echo "ZRAM LuCI: system.js not found, skip"
+fi
+
 # 定义预期的内核版本
 SUPPORTED_KERNEL="6.12"
 
@@ -137,11 +169,1478 @@ rm -rf ./package/new/shortcut-fe
 # that no longer exists (07_fw3.sh does the iptables-side equivalent).
 rm -rf ./package/new/lede_pkg/fullconenat-nft
 sed -i 's/ +kmod-nft-fullcone//' ./package/new/addition-trans-zh/Makefile
-rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed}
-rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier}
+
+# 删除 OpenWrt-Add 顶层遗留的旧版 trojan-plus，避免重复
+# 保留 package/new/openwrt_helloworld/trojan-plus
+# 来源：sbwml/openwrt_helloworld
+# QiuSimons 已将 PassWall 中 trojan-plus 默认设为 n，如需使用需手动开启
+# 如需启用，可在 config.seed 中加入：
+# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus=y
+rm -rf ./package/new/trojan-plus
+
+### Default Settings：修正 UPnP 和 ttyd 默认状态 ###
+DEFAULT_SETTINGS="./package/new/addition-trans-zh/files/zzz-default-settings"
+DEFAULT_SETTINGS_BAK="./package/new/addition-trans-zh/zzz-default-settings.bak"
+
+if [ -f "$DEFAULT_SETTINGS" ]; then
+    if grep -Fq "uci set upnpd.config.enabled='0'" "$DEFAULT_SETTINGS" \
+        && ! grep -Fq '/etc/init.d/ttyd disable' "$DEFAULT_SETTINGS" \
+        && ! grep -Fq '/etc/init.d/ttyd stop' "$DEFAULT_SETTINGS"; then
+        echo "Default Settings: UPnP/ttyd defaults already satisfied"
+    elif grep -Fq "uci set upnpd.config.enabled='1'" "$DEFAULT_SETTINGS" \
+        || grep -Fq '/etc/init.d/ttyd disable' "$DEFAULT_SETTINGS" \
+        || grep -Fq '/etc/init.d/ttyd stop' "$DEFAULT_SETTINGS"; then
+        [ -f "$DEFAULT_SETTINGS_BAK" ] || cp -af "$DEFAULT_SETTINGS" "$DEFAULT_SETTINGS_BAK"
+        DEFAULT_SETTINGS_TMP="$(mktemp)"
+        cp -p "$DEFAULT_SETTINGS" "$DEFAULT_SETTINGS_TMP"
+
+        # UPnP 默认保持关闭
+        sed -i "s/uci set upnpd.config.enabled='1'/uci set upnpd.config.enabled='0'/" "$DEFAULT_SETTINGS"
+
+        # ttyd 保持固件原本的自启动状态，不再首次启动时关闭
+        sed -i '/\/etc\/init.d\/ttyd disable 2>\/dev\/null/d' "$DEFAULT_SETTINGS"
+        sed -i '/\/etc\/init.d\/ttyd stop/d' "$DEFAULT_SETTINGS"
+
+        if grep -Fq "uci set upnpd.config.enabled='0'" "$DEFAULT_SETTINGS" \
+            && ! grep -Fq '/etc/init.d/ttyd disable' "$DEFAULT_SETTINGS" \
+            && ! grep -Fq '/etc/init.d/ttyd stop' "$DEFAULT_SETTINGS"; then
+            echo "Default Settings: UPnP disabled and ttyd startup preserved"
+        else
+            echo "WARNING: Default Settings patch validation failed"
+            cp -p "$DEFAULT_SETTINGS_TMP" "$DEFAULT_SETTINGS"
+            echo "WARNING: original zzz-default-settings restored"
+        fi
+
+        rm -f "$DEFAULT_SETTINGS_TMP"
+    else
+        echo "Default Settings: source changed, skip"
+    fi
+else
+    echo "Default Settings: zzz-default-settings not found, skip"
+fi
+
+### ttyd：LAN 接口重新配置后自动重启 ###
+TTYD_INIT="./feeds/packages/utils/ttyd/files/ttyd.init"
+TTYD_TRIGGER='procd_add_interface_trigger "interface.*" "lan" /etc/init.d/$NAME restart'
+
+if [ -f "$TTYD_INIT" ]; then
+    if grep -Fq "$TTYD_TRIGGER" "$TTYD_INIT"; then
+        echo "ttyd: LAN restart trigger already exists"
+    elif grep -Fq 'procd_add_interface_trigger' "$TTYD_INIT"; then
+        echo "ttyd: upstream interface trigger exists, skip"
+    elif [ "$(grep -Fc 'procd_add_reload_trigger "$NAME"' "$TTYD_INIT")" -eq 1 ]; then
+        sed -i $'/procd_add_reload_trigger "$NAME"/a\\\n\tprocd_add_interface_trigger "interface.*" "lan" /etc/init.d/$NAME restart' "$TTYD_INIT"
+
+        if grep -Fq "$TTYD_TRIGGER" "$TTYD_INIT"; then
+            echo "ttyd: LAN restart trigger patch applied"
+        else
+            echo "WARNING: ttyd LAN restart trigger patch failed"
+        fi
+    else
+        echo "ttyd: source changed, skip"
+    fi
+else
+    echo "ttyd: ttyd.init not found, skip"
+fi
+
+### UnblockNeteaseMusic：补回 Node.js 运行依赖 ###
+UNM_MAKEFILE="./package/new/luci-app-unblockneteasemusic/Makefile"
+UNM_INIT="./package/new/luci-app-unblockneteasemusic/root/etc/init.d/unblockneteasemusic"
+
+if [ -f "$UNM_MAKEFILE" ]; then
+    if grep -q '+node' "$UNM_MAKEFILE"; then
+        echo "UnblockNeteaseMusic: Node.js dependency already present"
+    elif [ "$(grep -Fc 'LUCI_DEPENDS:=+dnsmasq-full \' "$UNM_MAKEFILE")" -eq 1 ]; then
+        sed -i 's/^LUCI_DEPENDS:=+dnsmasq-full \\/LUCI_DEPENDS:=+dnsmasq-full +node \\/' "$UNM_MAKEFILE"
+        grep -q '+node' "$UNM_MAKEFILE" \
+            && echo "UnblockNeteaseMusic: Node.js dependency patch applied" \
+            || echo "WARNING: UnblockNeteaseMusic Node.js dependency patch failed"
+    else
+        echo "UnblockNeteaseMusic: Makefile changed, skip Node.js dependency patch"
+    fi
+else
+    echo "UnblockNeteaseMusic: Makefile not found, skip"
+fi
+
+# OpenWrt 25.12 已使用 apk，删除旧版运行时调用 opkg 安装 node 的逻辑
+if [ -f "$UNM_INIT" ]; then
+    if grep -q 'opkg update.*opkg install node' "$UNM_INIT"; then
+        sed -i '/opkg update.*opkg install node/d' "$UNM_INIT"
+        ! grep -q 'opkg update.*opkg install node' "$UNM_INIT" \
+            && echo "UnblockNeteaseMusic: legacy runtime opkg install removed" \
+            || echo "WARNING: UnblockNeteaseMusic runtime opkg removal failed"
+    elif grep -q 'opkg install node' "$UNM_INIT"; then
+        echo "UnblockNeteaseMusic: runtime install logic changed, skip"
+    else
+        echo "UnblockNeteaseMusic: runtime opkg install already absent"
+    fi
+else
+    echo "UnblockNeteaseMusic: init script not found, skip"
+fi
+
+### MosDNS：保留关键诊断日志并扩充公共查询信息 ###
+# 1. query_summary：使用 Warn 门槛保留输出，最终显示为 Info
+# 2. debug_print：使用 Warn 门槛保留输出，最终显示为 Info
+# 3. 公共查询日志增加实际 ECS 和当前 marks
+# 4. cache / upstream / IP / CNAME / TTL 等继续使用上游已有信息
+# 5. ecs_handler 增加 overwrite / clear：
+#    - overwrite：有新的 ECS 时允许覆盖当前 QOpt 中已有 ECS
+#    - clear：显式清除当前 QOpt 中已有 ECS
+# 6. ecs_handler 响应 ECS 使用 replace-or-append，避免嵌套 forward:true 重复写入
+# 7. 上游相关实现发生变化时，只跳过对应本地增强，避免重复修改或错误套用旧补丁
+
+MOSDNS_PATCH_DIR="./package/new/luci-app-mosdns/mosdns/patches"
+MOSDNS_QUERY_PATCH="${MOSDNS_PATCH_DIR}/211-feat-add-query-log-support.patch"
+MOSDNS_ECS_PATCH="${MOSDNS_PATCH_DIR}/998-local-ecs-handler-overwrite.patch"
+MOSDNS_LOCAL_PATCH="${MOSDNS_PATCH_DIR}/999-local-debug-log-enhance.patch"
+
+# 清理旧版本地补丁
+rm -f "${MOSDNS_PATCH_DIR}/999-local-query-log-level.patch"
+rm -f "${MOSDNS_ECS_PATCH}"
+rm -f "${MOSDNS_LOCAL_PATCH}"
+
+MOSDNS_ECS_PATCH_OK=1
+MOSDNS_CONTEXT_PATCH=1
+MOSDNS_LOG_PATCH=1
+
+
+### MosDNS：ecs_handler 支持显式覆盖 / 清除 ECS，并避免响应 ECS 重复 ###
+#
+# 默认 overwrite=false / clear=false：
+# 查询侧保持 MosDNS 原有行为，QOpt 已经有 ECS 时直接跳过。
+#
+# overwrite=true：
+# 允许当前 ecs_handler 使用新的 ECS 覆盖 QOpt 中已有 ECS。
+# 只有真正找到新的 ECS 时才进行替换。
+# 如果 forward / preset / send 都没有产生新的 ECS，
+# 当前已有 ECS 继续保留。
+#
+# clear=true：
+# 进入当前 ecs_handler 时先清除 QOpt 中已有 ECS。
+# clear 只负责显式删除，不改变 overwrite 的原有安全语义。
+#
+# clear=true 可以单独使用：
+#
+#   type: ecs_handler
+#   args:
+#     clear: true
+#
+# 此时仅清除当前 ECS，不产生新的 ECS。
+#
+# ECS 来源优先级保持原逻辑：
+#
+# forward > preset > send
+#
+# 响应侧：
+# forwarded=true 时回传最终上游 ECS。
+# RespOpt 已有 ECS 时替换；
+# RespOpt 没有 ECS 时才 append。
+# 避免多个 forward:true ecs_handler 嵌套时重复追加 ECS。
+#
+# 如果 sbwml 后续已经修改 ecs_handler，
+# 自动跳过本地增强，避免和上游实现冲突。
+
+# 如果上游补丁已经修改 ecs_handler，则停止自动修改
+if grep -RqsE \
+	'plugin/executable/ecs_handler/handler\.go' \
+	"${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream modifies ecs_handler, skip local ECS enhancement"
+	MOSDNS_ECS_PATCH_OK=0
+fi
+
+# 如果上游补丁已经实现 overwrite，则停止自动修改
+if [ "${MOSDNS_ECS_PATCH_OK}" = "1" ] && \
+	grep -RqsE \
+		'Overwrite[[:space:]]+bool|yaml:"overwrite"' \
+		"${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream already contains ECS overwrite support, skip local ECS enhancement"
+	MOSDNS_ECS_PATCH_OK=0
+fi
+
+if [ "${MOSDNS_ECS_PATCH_OK}" = "1" ]; then
+
+	cat > "${MOSDNS_ECS_PATCH}" <<'EOF'
+--- a/plugin/executable/ecs_handler/handler.go
++++ b/plugin/executable/ecs_handler/handler.go
+@@ -46,11 +46,13 @@
+ var _ sequence.RecursiveExecutable = (*ECSHandler)(nil)
+ 
+ type Args struct {
+-	Forward bool   `yaml:"forward"`
+-	Send    bool   `yaml:"send"`
+-	Preset  string `yaml:"preset"`
+-	Mask4   int    `yaml:"mask4"`
+-	Mask6   int    `yaml:"mask6"`
++	Forward   bool   `yaml:"forward"`
++	Send      bool   `yaml:"send"`
++	Overwrite bool   `yaml:"overwrite"`
++	Clear     bool   `yaml:"clear"`
++	Preset    string `yaml:"preset"`
++	Mask4     int    `yaml:"mask4"`
++	Mask6     int    `yaml:"mask6"`
+ }
+ 
+ type ECSHandler struct {
+@@ -107,6 +109,12 @@
+ 		if respOpt != nil && upstreamOpt != nil {
+ 			for _, o := range upstreamOpt.Option {
+ 				if o.Option() == dns.EDNS0SUBNET {
++					for i, existing := range respOpt.Option {
++						if existing.Option() == dns.EDNS0SUBNET {
++							respOpt.Option[i] = o
++							return nil
++						}
++					}
+ 					respOpt.Option = append(respOpt.Option, o)
+ 					break
+ 				}
+@@ -119,12 +127,34 @@
+ // AddECS adds a *dns.EDNS0_SUBNET record to q.
+ func (e *ECSHandler) addECS(qCtx *query_context.Context) (forwarded bool) {
+ 	queryOpt := qCtx.QOpt()
+-	// Check if query already has an ecs.
+-	for _, o := range queryOpt.Option {
++
++	if e.args.Clear {
++		opts := queryOpt.Option[:0]
++		for _, o := range queryOpt.Option {
++			if o.Option() != dns.EDNS0SUBNET {
++				opts = append(opts, o)
++			}
++		}
++		queryOpt.Option = opts
++	}
++
++	ecsIndex := -1
++	for i, o := range queryOpt.Option {
+ 		if o.Option() == dns.EDNS0SUBNET {
+-			return false // skip it
++			ecsIndex = i
++			break
+ 		}
+ 	}
++	if ecsIndex >= 0 && !e.args.Overwrite {
++		return false // skip it
++	}
++	setECS := func(ecs dns.EDNS0) {
++		if ecsIndex >= 0 {
++			queryOpt.Option[ecsIndex] = ecs
++		} else {
++			queryOpt.Option = append(queryOpt.Option, ecs)
++		}
++	}
+ 	if qCtx.QQuestion().Qclass != dns.ClassINET {
+ 		// RFC 7871 5:
+ 		// ECS is only defined for the Internet (IN) DNS class.
+@@ -136,7 +166,7 @@
+ 		if clientOpt != nil {
+ 			for _, o := range clientOpt.Option {
+ 				if o.Option() == dns.EDNS0SUBNET {
+-					queryOpt.Option = append(queryOpt.Option, o)
++					setECS(o)
+ 					return true
+ 				}
+ 			}
+@@ -151,7 +181,7 @@
+ 		} else {
+ 			ecs = newSubnet(clientAddr.AsSlice(), uint8(e.args.Mask6), true)
+ 		}
+-		queryOpt.Option = append(queryOpt.Option, ecs)
++		setECS(ecs)
+ 		return false
+ 	}
+ 
+@@ -165,7 +195,7 @@
+ 			} else {
+ 				ecs = newSubnet(clientAddr.AsSlice(), uint8(e.args.Mask6), true)
+ 			}
+-			queryOpt.Option = append(queryOpt.Option, ecs)
++			setECS(ecs)
+ 			return false
+ 		}
+ 	}
+EOF
+
+	echo "MosDNS: created ${MOSDNS_ECS_PATCH}"
+	echo "MosDNS: ecs_handler -> add overwrite / clear support"
+	echo "MosDNS: ECS response -> replace existing ECS or append once"
+	echo "MosDNS: ECS source priority -> forward > preset > send"
+
+else
+
+	rm -f "${MOSDNS_ECS_PATCH}"
+	echo "MosDNS: ECS enhancement not applied"
+
+fi
+
+### MosDNS：公共查询日志增强 ###
+
+# 当前 Query Log 上游补丁不存在时，无法确认依赖结构
+if [ ! -f "${MOSDNS_QUERY_PATCH}" ]; then
+	echo "MosDNS: upstream query log patch not found, skip local debug log enhancement"
+	MOSDNS_CONTEXT_PATCH=0
+	MOSDNS_LOG_PATCH=0
+fi
+
+# ECS / marks 已由上游实现时，不再重复增加
+if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ] && \
+	grep -RqsE 'encoder\.AddString\("ecs"|encoder\.AddArray\("marks"' "${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream already contains ECS/marks query logging, skip local query context enhancement"
+	MOSDNS_CONTEXT_PATCH=0
+fi
+
+# 确认本地 ECS / marks 修改依赖的公共 Query Context 结构仍然存在
+if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ]; then
+	if grep -q 'encoder.AddString("protocol", proto)' "${MOSDNS_QUERY_PATCH}" \
+		&& grep -q 'encoder.AddObject("cache"' "${MOSDNS_QUERY_PATCH}" \
+		&& grep -q 'ctx.UpstreamSelected != nil' "${MOSDNS_QUERY_PATCH}" \
+		&& grep -q 'mlog.IsDebug() && len(ctx.RuleHits) > 0' "${MOSDNS_QUERY_PATCH}"; then
+
+		echo "MosDNS: detected known upstream query context logging"
+	else
+		echo "MosDNS: upstream query context logging changed, skip local query context enhancement"
+		MOSDNS_CONTEXT_PATCH=0
+	fi
+fi
+
+# 如果 sbw 后续补丁已经修改 query_summary / debug_print，
+# 停止自动修改这两个插件，避免重复处理或和新的上游实现冲突
+if [ "${MOSDNS_LOG_PATCH}" = "1" ] && \
+	grep -RqsE 'plugin/executable/(query_summary/query_summary\.go|debug_print/print\.go)' "${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream modifies query_summary/debug_print, skip local log level enhancement"
+	MOSDNS_LOG_PATCH=0
+fi
+
+# 创建本地日志补丁
+if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ] || [ "${MOSDNS_LOG_PATCH}" = "1" ]; then
+
+	: > "${MOSDNS_LOCAL_PATCH}"
+
+	# 公共 Query Context 增加 ECS 和排序后的 marks
+	if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ]; then
+		cat >> "${MOSDNS_LOCAL_PATCH}" <<'EOF'
+--- a/pkg/query_context/context.go
++++ b/pkg/query_context/context.go
+@@ -20,5 +20,6 @@
+ import (
+ 	"fmt"
++	"sort"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -314,3 +315,26 @@
+ 	encoder.AddString("protocol", proto)
+ 
++	for _, option := range ctx.QOpt().Option {
++		if ecs, ok := option.(*dns.EDNS0_SUBNET); ok {
++			encoder.AddString("ecs", fmt.Sprintf("%s/%d", ecs.Address.String(), ecs.SourceNetmask))
++			break
++		}
++	}
++
++	if len(ctx.marks) > 0 {
++		marks := make([]uint32, 0, len(ctx.marks))
++		for mark := range ctx.marks {
++			marks = append(marks, mark)
++		}
++		sort.Slice(marks, func(i, j int) bool {
++			return marks[i] < marks[j]
++		})
++		encoder.AddArray("marks", zapcore.ArrayMarshalerFunc(func(arr zapcore.ArrayEncoder) error {
++			for _, mark := range marks {
++				arr.AppendUint32(mark)
++			}
++			return nil
++		}))
++	}
++
+ 	if mlog.IsDebug() && len(ctx.RuleHits) > 0 {
+EOF
+	fi
+
+	# query_summary / debug_print：
+	# 使用 Warn 级别参与日志门槛判断，通过后将最终显示级别恢复为 Info
+	if [ "${MOSDNS_LOG_PATCH}" = "1" ]; then
+		cat >> "${MOSDNS_LOCAL_PATCH}" <<'EOF'
+--- a/plugin/executable/query_summary/query_summary.go
++++ b/plugin/executable/query_summary/query_summary.go
+@@ -62,9 +62,11 @@
+ func (l *SummaryLogger) Exec(ctx context.Context, qCtx *query_context.Context, next sequence.ChainWalker) error {
+ 	err := next.ExecNext(ctx, qCtx)
+-	l.l.Info(
+-		l.msg,
+-		zap.Inline(qCtx),
+-		zap.Error(err),
+-	)
++	if ce := l.l.Check(zap.WarnLevel, l.msg); ce != nil {
++		ce.Entry.Level = zap.InfoLevel
++		ce.Write(
++			zap.Inline(qCtx),
++			zap.Error(err),
++		)
++	}
+ 	return err
+ }
+--- a/plugin/executable/debug_print/print.go
++++ b/plugin/executable/debug_print/print.go
+@@ -51,7 +51,16 @@
+ func (b *DebugPrint) Exec(_ context.Context, qCtx *query_context.Context) error {
+-	b.BQ.L().Info(b.msg, zap.Stringer("query", qCtx.Q()))
++	l := b.BQ.L()
++
++	if ce := l.Check(zap.WarnLevel, b.msg); ce != nil {
++		ce.Entry.Level = zap.InfoLevel
++		ce.Write(zap.Stringer("query", qCtx.Q()))
++	}
++
+ 	if r := qCtx.R(); r != nil {
+-		b.BQ.L().Info(b.msg, zap.Stringer("response", r))
++		if ce := l.Check(zap.WarnLevel, b.msg); ce != nil {
++			ce.Entry.Level = zap.InfoLevel
++			ce.Write(zap.Stringer("response", r))
++		}
+ 	}
+ 	return nil
+ }
+EOF
+	fi
+
+	echo "MosDNS: created ${MOSDNS_LOCAL_PATCH}"
+
+	if [ "${MOSDNS_CONTEXT_PATCH}" = "1" ]; then
+		echo "MosDNS: query context -> add ECS and sorted marks"
+	else
+		echo "MosDNS: query context -> keep upstream behavior"
+	fi
+
+	if [ "${MOSDNS_LOG_PATCH}" = "1" ]; then
+		echo "MosDNS: query_summary -> Warn threshold / Info display"
+		echo "MosDNS: debug_print -> Warn threshold / Info display"
+	else
+		echo "MosDNS: query_summary/debug_print -> keep upstream behavior"
+	fi
+else
+	rm -f "${MOSDNS_LOCAL_PATCH}"
+	echo "MosDNS: no local debug log enhancement required"
+fi
+
+### OpenAppFilter：切换到 destan19 源码 ###
+rm -rf ./package/new/OpenAppFilter
+cp -rf ../OpenAppFilter ./package/new/OpenAppFilter
+
+### OpenAppFilter：运行环境兼容修复 ###
+
+OAF_DASHBOARD="./package/new/OpenAppFilter/luci-app-oaf/luasrc/view/oaf/dashboard.htm"
+OAF_UBUS_SRC="./package/new/OpenAppFilter/open-app-filter/src/fwx_ubus.c"
+
+
+### 1. 修复打开 OAF Dashboard 后自动切菜单样式 ###
+# OAF Dashboard 会主动写入：
+# localStorage.setItem('luci-menu-category', 'basic');
+#
+# 这会覆盖 KuCat 已保存的 allmenu 状态，
+# 导致进入 OAF 页面后从“完整菜单”自动切回“自定义菜单”。
+#
+# 仅在该旧代码精确出现 1 次时删除。
+# 如果上游已经修复或代码结构发生变化，则自动跳过。
+
+if [ -f "${OAF_DASHBOARD}" ]; then
+
+	OAF_KUCAT_OLD="localStorage.setItem('luci-menu-category', 'basic');"
+	OAF_KUCAT_OLD_COUNT="$(grep -Fc "${OAF_KUCAT_OLD}" "${OAF_DASHBOARD}")"
+
+	if [ "${OAF_KUCAT_OLD_COUNT}" -eq 1 ]; then
+		echo "OpenAppFilter: fix Dashboard forcing KuCat custom menu"
+
+		sed -i \
+			"/localStorage.setItem('luci-menu-category', 'basic');/d" \
+			"${OAF_DASHBOARD}"
+
+	elif [ "${OAF_KUCAT_OLD_COUNT}" -eq 0 ]; then
+		echo "OpenAppFilter: KuCat target code not found, skip"
+
+	else
+		echo "OpenAppFilter: unexpected KuCat menu code count ${OAF_KUCAT_OLD_COUNT}, skip"
+	fi
+
+else
+	echo "OpenAppFilter: dashboard.htm not found, skip KuCat menu fix"
+fi
+
+
+### 2. 修复 oafd 后台调用 top 报错及 procps-ng 多核 CPU 解析兼容 ###
+# 原代码：
+# top -n 1 | grep 'CPU:' ...
+#
+# 在当前 procps-ng 环境存在两个已确认问题：
+# 1. oafd 由 procd 后台运行，没有 TTY，top -n 1 会输出：
+#    top: failed tty get
+# 2. procps-ng CPU 输出为 %Cpu(s) / %Cpu0 / %Cpu1 ...，
+#    原来的 grep 'CPU:' 无法正确取得 idle。
+#
+# 修复：
+# - 使用 top -b -n 1，避免后台 TTY 报错
+# - LC_ALL=C 固定 top 字段语言
+# - 自动定位每个 %Cpu 行的 id 字段，读取其前一列 idle 数值并求平均
+# - 输出平均 idle，继续兼容上游现有：
+#   cpu_usage = 100 - atoi(result);
+# - 解析不到 CPU 行时返回 idle=100，使 CPU 使用率安全回落为 0
+#
+# 仅在当前已确认的问题代码精确出现 1 次时修改。
+# 如果上游已经修复或实现发生变化，则自动跳过。
+
+if [ -f "${OAF_UBUS_SRC}" ]; then
+
+	OAF_CPU_OLD="top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'"
+	OAF_CPU_NEW="LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print int(s/n+0.5); else print 100}'"
+
+	OAF_CPU_OLD_COUNT="$(grep -Fc "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}")"
+	OAF_CPU_NEW_COUNT="$(grep -Fc "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}")"
+
+	if [ "${OAF_CPU_OLD_COUNT}" -eq 1 ] \
+		&& [ "${OAF_CPU_NEW_COUNT}" -eq 0 ]; then
+
+		echo "OpenAppFilter: fix oafd procps-ng top compatibility"
+
+		OAF_CPU_BACKUP="$(mktemp)"
+		cp -p "${OAF_UBUS_SRC}" "${OAF_CPU_BACKUP}"
+
+		sed -i \
+			"s@top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'@LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print int(s/n+0.5); else print 100}'@" \
+			"${OAF_UBUS_SRC}"
+
+		if [ "$(grep -Fc "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}")" -eq 1 ] \
+			&& ! grep -Fq "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}"; then
+
+			echo "OpenAppFilter: oafd top compatibility fix applied"
+
+		else
+
+			echo "WARNING: OpenAppFilter oafd top compatibility patch validation failed"
+			echo "WARNING: original fwx_ubus.c restored"
+			cat "${OAF_CPU_BACKUP}" > "${OAF_UBUS_SRC}"
+
+		fi
+
+		rm -f "${OAF_CPU_BACKUP}"
+
+	elif [ "${OAF_CPU_NEW_COUNT}" -eq 1 ] \
+		&& [ "${OAF_CPU_OLD_COUNT}" -eq 0 ]; then
+
+		echo "OpenAppFilter: oafd top compatibility fix already applied"
+
+	elif [ "${OAF_CPU_OLD_COUNT}" -eq 0 ] \
+		&& [ "${OAF_CPU_NEW_COUNT}" -eq 0 ]; then
+
+		echo "OpenAppFilter: CPU target code not found or already changed, skip"
+
+	else
+
+		echo "OpenAppFilter: unexpected CPU command count, skip"
+		echo "OpenAppFilter: old=${OAF_CPU_OLD_COUNT} new=${OAF_CPU_NEW_COUNT}"
+
+	fi
+
+else
+
+	echo "OpenAppFilter: fwx_ubus.c not found, skip CPU compatibility fix"
+
+fi
+
+### 3. destan19 OpenAppFilter 7.x：运行时兼容修复 ###
+# 仅针对 destan19 7.x：
+# 1. /usr/bin/oaf_rule 不存在时不执行 legacy reload
+# 2. fwx_agent 不存在时不执行可选 forward
+#
+# 仅在当前已确认的旧代码结构存在时修改。
+# 上游以后修复或代码结构变化时自动跳过。
+
+OAF_DESTAN_ROOT="./package/new/OpenAppFilter/open-app-filter"
+OAF_UBUS_SRC="${OAF_DESTAN_ROOT}/src/fwx_ubus.c"
+OAF_RULE_MANAGER="${OAF_DESTAN_ROOT}/files/rule_manager.lua"
+
+if [ -f "${OAF_UBUS_SRC}" ] && [ -f "${OAF_RULE_MANAGER}" ]; then
+
+	OAF_RUNTIME_PATCHED=0
+
+
+	### 3.1 legacy /usr/bin/oaf_rule ###
+	if grep -Fq 'if (access("/usr/bin/oaf_rule", X_OK) == 0)' "${OAF_UBUS_SRC}"; then
+
+		echo "OpenAppFilter: oaf_rule guard already applied"
+
+	else
+
+		OAF_RULE_FUNC_COUNT="$(grep -Fc 'void reload_oaf_rule(){' "${OAF_UBUS_SRC}")"
+		OAF_RULE_OLD_COUNT="$(grep -Fc 'system("/usr/bin/oaf_rule reload");' "${OAF_UBUS_SRC}")"
+
+		if [ "${OAF_RULE_FUNC_COUNT}" -eq 1 ] && [ "${OAF_RULE_OLD_COUNT}" -eq 1 ]; then
+
+			sed -i \
+				'/^void reload_oaf_rule(){$/,/^}$/ {
+					/^[[:space:]]*system("\/usr\/bin\/oaf_rule reload");$/c\
+    if (access("/usr/bin/oaf_rule", X_OK) == 0)\
+        system("/usr/bin/oaf_rule reload");
+				}' \
+				"${OAF_UBUS_SRC}"
+
+			if grep -Fq 'if (access("/usr/bin/oaf_rule", X_OK) == 0)' "${OAF_UBUS_SRC}"; then
+
+				echo "OpenAppFilter: guard legacy oaf_rule reload"
+				OAF_RUNTIME_PATCHED=1
+
+			else
+
+				echo "OpenAppFilter: oaf_rule guard patch failed"
+
+			fi
+
+		else
+
+			echo "OpenAppFilter: oaf_rule implementation changed upstream, skip"
+
+		fi
+	fi
+
+
+	### 3.2 optional fwx_agent ###
+	if grep -Fq 'ubus_lookup_id(ubus_ctx, "fwx_agent"' "${OAF_UBUS_SRC}"; then
+
+		echo "OpenAppFilter: fwx_agent guard already applied"
+
+	else
+
+		OAF_AGENT_FUNC_COUNT="$(grep -Fc 'static void fwx_forward_to_agent(struct json_object *req_obj) {' "${OAF_UBUS_SRC}")"
+		OAF_AGENT_CMD_COUNT="$(grep -Fc $'\tchar *cmd_buf = NULL;' "${OAF_UBUS_SRC}")"
+		OAF_AGENT_OLD_COUNT="$(grep -Fc $'\tif (!req_obj)' "${OAF_UBUS_SRC}")"
+
+		if [ "${OAF_AGENT_FUNC_COUNT}" -eq 1 ] \
+			&& [ "${OAF_AGENT_CMD_COUNT}" -eq 1 ] \
+			&& [ "${OAF_AGENT_OLD_COUNT}" -eq 1 ] \
+			&& grep -Fq 'ubus -t 2 call fwx_agent forward' "${OAF_UBUS_SRC}"; then
+
+			sed -i \
+				'/^static void fwx_forward_to_agent(struct json_object \*req_obj) {$/,/^}$/ {
+					/^[[:space:]]*char \*cmd_buf = NULL;$/,/^[[:space:]]*return;$/c\
+\tchar *cmd_buf = NULL;\
+\tuint32_t agent_id = 0;\
+\
+\tif (!req_obj || !ubus_ctx)\
+\t\treturn;\
+\
+\tif (ubus_lookup_id(ubus_ctx, "fwx_agent", \&agent_id) != 0)\
+\t\treturn;
+				}' \
+				"${OAF_UBUS_SRC}"
+
+			if grep -Fq 'ubus_lookup_id(ubus_ctx, "fwx_agent"' "${OAF_UBUS_SRC}"; then
+
+				echo "OpenAppFilter: guard optional fwx_agent forwarding"
+				OAF_RUNTIME_PATCHED=1
+
+			else
+
+				echo "OpenAppFilter: fwx_agent guard patch failed"
+
+			fi
+
+		elif ! grep -Fq 'ubus -t 2 call fwx_agent forward' "${OAF_UBUS_SRC}"; then
+
+			echo "OpenAppFilter: fwx_agent forwarding changed upstream, skip"
+
+		else
+
+			echo "OpenAppFilter: fwx_agent function structure changed upstream, skip"
+
+		fi
+	fi
+
+
+	if [ "${OAF_RUNTIME_PATCHED}" -eq 1 ]; then
+
+		echo "OpenAppFilter: runtime compatibility patched"
+
+	else
+
+		echo "OpenAppFilter: runtime compatibility unchanged"
+
+	fi
+
+else
+
+	echo "OpenAppFilter: destan19 7.x source not detected, skip runtime compatibility patch"
+
+fi
+
+
+### OpenAppFilter 兼容修复结果检查 ###
+
+echo "===== OpenAppFilter YAOF compatibility patch ====="
+
+
+### KuCat Dashboard ###
+if [ -f "${OAF_DASHBOARD}" ]; then
+
+	if grep -Fq \
+		"localStorage.setItem('luci-menu-category', 'basic');" \
+		"${OAF_DASHBOARD}"; then
+
+		echo "KuCat menu compatibility: NOT PATCHED"
+
+	else
+
+		echo "KuCat menu compatibility: OK"
+
+	fi
+fi
+
+
+### oafd CPU top compatibility ###
+if [ -f "${OAF_UBUS_SRC}" ]; then
+
+	OAF_CPU_OLD="top -n 1 | grep 'CPU:' | awk -F '%' '{print\$4}' | awk -F ' ' '{print\$2}'"
+	OAF_CPU_NEW="LC_ALL=C top -b -n 1 | awk '/^%Cpu/{for(i=2;i<=NF;i++) if(\$i ~ /^id,?\$/){s+=\$(i-1);n++}} END{if(n) print int(s/n+0.5); else print 100}'"
+
+	if [ "$(grep -Fc "${OAF_CPU_NEW}" "${OAF_UBUS_SRC}")" -eq 1 ] \
+		&& ! grep -Fq "${OAF_CPU_OLD}" "${OAF_UBUS_SRC}"; then
+
+		echo "oafd CPU top compatibility: OK"
+
+		echo "===== dashboard CPU command ====="
+		grep -n -A6 -B3 \
+			'LC_ALL=C top -b -n 1' \
+			"${OAF_UBUS_SRC}" || true
+
+	else
+
+		echo "oafd CPU top compatibility: NOT PATCHED"
+
+	fi
+
+	### legacy oaf_rule ###
+	echo "===== reload_oaf_rule ====="
+	grep -n -A4 \
+		'^void reload_oaf_rule(){' \
+		"${OAF_UBUS_SRC}" || true
+
+	if grep -Fq \
+		'if (access("/usr/bin/oaf_rule", X_OK) == 0)' \
+		"${OAF_UBUS_SRC}"; then
+
+		echo "oaf_rule guard: OK"
+
+	else
+
+		echo "oaf_rule guard: NOT PATCHED"
+
+	fi
+
+
+	### optional fwx_agent ###
+	echo "===== fwx_forward_to_agent ====="
+	grep -n -A18 \
+		'^static void fwx_forward_to_agent(struct json_object \*req_obj) {' \
+		"${OAF_UBUS_SRC}" || true
+
+	if grep -Fq \
+		'ubus_lookup_id(ubus_ctx, "fwx_agent"' \
+		"${OAF_UBUS_SRC}"; then
+
+		echo "fwx_agent guard: OK"
+
+	else
+
+		echo "fwx_agent guard: NOT PATCHED"
+
+	fi
+
+fi
+
+### OpenAppFilter：修复异常 skb 长度及 nonlinear skb 安全读取 ###
+# 1. 非线性 skb 处理前增加 l4_len > 0 检查
+# 2. read_skb 增加 from / len 最终边界检查
+# 3. 网络 softirq 路径内存申请使用 GFP_ATOMIC
+# 4. 使用 skb_copy_bits 精确复制 len 字节，避免 skb_seq_read
+#    返回块大于目标缓冲区导致 memcpy 越界
+# 5. 保留 sbwml v6 app_filter.c 兼容分支，当前 YAOF 默认使用 destan19 fwx_main.c
+
+OAF_SRC=""
+OAF_CAN_PATCH=1
+
+# 优先识别 destan19 新版源码
+if [ -f "./package/new/OpenAppFilter/oaf/src/fwx_main.c" ]; then
+	OAF_SRC="./package/new/OpenAppFilter/oaf/src/fwx_main.c"
+
+# 兼容 sbwml v6 当前源码
+elif [ -f "./package/new/OpenAppFilter/oaf/src/app_filter.c" ]; then
+	OAF_SRC="./package/new/OpenAppFilter/oaf/src/app_filter.c"
+
+else
+	echo "OpenAppFilter: source file not found, skip skb safety patch"
+	OAF_CAN_PATCH=0
+fi
+
+
+### 1. nonlinear skb 只处理有效 l4_len ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	OAF_OLD_COND='if (skb_is_nonlinear(skb) && flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)'
+	OAF_NEW_COND='if (skb_is_nonlinear(skb) && flow.l4_len > 0 && flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)'
+
+	if grep -Fq "${OAF_OLD_COND}" "${OAF_SRC}"; then
+
+		echo "OpenAppFilter: add l4_len > 0 check"
+
+		sed -i \
+			's/if (skb_is_nonlinear(skb) && flow\.l4_len < MAX_AF_SUPPORT_DATA_LEN)/if (skb_is_nonlinear(skb) \&\& flow.l4_len > 0 \&\& flow.l4_len < MAX_AF_SUPPORT_DATA_LEN)/g' \
+			"${OAF_SRC}"
+
+	elif grep -Fq "${OAF_NEW_COND}" "${OAF_SRC}"; then
+
+		echo "OpenAppFilter: l4_len safety check already applied"
+
+	else
+
+		echo "OpenAppFilter: l4_len code structure changed, skip this patch"
+
+	fi
+fi
+
+
+### 2. read_skb 最终边界检查 ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	if grep -Fq "len > skb->len - from" "${OAF_SRC}"; then
+
+		echo "OpenAppFilter: read_skb bounds check already applied"
+
+	else
+
+		OAF_CONSUMED_COUNT="$(grep -Ec '^[[:space:]]*unsigned int consumed = 0;' "${OAF_SRC}")"
+
+		if [ "${OAF_CONSUMED_COUNT}" -eq 1 ]; then
+
+			echo "OpenAppFilter: add read_skb bounds check"
+
+			sed -i $'/^[[:space:]]*unsigned int consumed = 0;/a\
+\
+\tif (!skb || !len || len > MAX_AF_SUPPORT_DATA_LEN)\
+\t\treturn NULL;\
+\
+\tif (from >= skb->len || len > skb->len - from)\
+\t\treturn NULL;' \
+				"${OAF_SRC}"
+
+		else
+
+			echo "OpenAppFilter: read_skb structure changed, skip bounds patch"
+
+		fi
+	fi
+fi
+
+
+### 3. read_skb 使用 GFP_ATOMIC ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	if grep -Fq "msg_buf = kmalloc(len, GFP_ATOMIC);" "${OAF_SRC}"; then
+
+		echo "OpenAppFilter: read_skb already uses GFP_ATOMIC"
+
+	else
+
+		OAF_GFP_COUNT="$(grep -Fc "msg_buf = kmalloc(len, GFP_KERNEL);" "${OAF_SRC}")"
+
+		if [ "${OAF_GFP_COUNT}" -eq 1 ]; then
+
+			echo "OpenAppFilter: change read_skb GFP_KERNEL to GFP_ATOMIC"
+
+			sed -i \
+				's/msg_buf = kmalloc(len, GFP_KERNEL);/msg_buf = kmalloc(len, GFP_ATOMIC);/' \
+				"${OAF_SRC}"
+
+		else
+
+			echo "OpenAppFilter: kmalloc code structure changed, skip GFP patch"
+
+		fi
+	fi
+fi
+
+
+### 4. read_skb 使用 skb_copy_bits 精确复制 ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	if grep -Fq "skb_copy_bits(skb, from, msg_buf, len)" "${OAF_SRC}"; then
+
+		echo "OpenAppFilter: read_skb skb_copy_bits fix already applied"
+
+	else
+
+		OAF_SEQ_COUNT="$(grep -Fc "skb_prepare_seq_read(skb, from, from + len, &state);" "${OAF_SRC}")"
+		OAF_UNSAFE_COPY_COUNT="$(grep -Fc "memcpy(msg_buf + consumed, ptr, avail);" "${OAF_SRC}")"
+
+		if [ "${OAF_SEQ_COUNT}" -eq 1 ] && [ "${OAF_UNSAFE_COPY_COUNT}" -eq 1 ]; then
+
+			echo "OpenAppFilter: replace unsafe skb_seq_read loop with skb_copy_bits"
+
+			sed -i \
+				'/^[[:space:]]*skb_prepare_seq_read(skb, from, from + len, &state);$/,/^[[:space:]]*return msg_buf;$/c\
+\tif (skb_copy_bits(skb, from, msg_buf, len) != 0)\
+\t{\
+\t\tkfree(msg_buf);\
+\t\treturn NULL;\
+\t}\
+\
+\treturn msg_buf;' \
+				"${OAF_SRC}"
+
+			# skb_seq_state 和 consumed 已经不再需要
+			# 仅在 read_skb 函数范围内删除，避免影响其他代码
+			sed -i \
+				'/^static unsigned char \*read_skb/,/^}/ {
+					/^[[:space:]]*struct skb_seq_state state;$/d
+					/^[[:space:]]*unsigned int consumed = 0;$/d
+				}' \
+				"${OAF_SRC}"
+
+		else
+
+			echo "OpenAppFilter: read_skb copy structure changed, skip skb_copy_bits patch"
+
+		fi
+	fi
+fi
+
+
+### OpenAppFilter skb 安全修复结果检查 ###
+if [ "${OAF_CAN_PATCH}" = "1" ]; then
+
+	echo "===== OpenAppFilter skb safety patch ====="
+	echo "Source: ${OAF_SRC}"
+
+	echo "===== l4_len checks ====="
+	grep -n \
+		"skb_is_nonlinear(skb).*flow.l4_len" \
+		"${OAF_SRC}" || true
+
+	echo "===== read_skb ====="
+	grep -n -A25 \
+		"static unsigned char \*read_skb" \
+		"${OAF_SRC}" || true
+
+	echo "===== safety status ====="
+
+	# 必须存在新的安全条件，同时旧条件必须已经完全消失
+	if grep -Fq \
+		"${OAF_NEW_COND}" \
+		"${OAF_SRC}" \
+		&& ! grep -Fq \
+		"${OAF_OLD_COND}" \
+		"${OAF_SRC}"; then
+
+		echo "l4_len safety: OK"
+
+	else
+
+		echo "l4_len safety: NOT PATCHED"
+
+	fi
+
+	if grep -Fq \
+		"len > skb->len - from" \
+		"${OAF_SRC}"; then
+
+		echo "read_skb bounds: OK"
+
+	else
+
+		echo "read_skb bounds: NOT PATCHED"
+
+	fi
+
+	if grep -Fq \
+		"msg_buf = kmalloc(len, GFP_ATOMIC);" \
+		"${OAF_SRC}"; then
+
+		echo "read_skb GFP_ATOMIC: OK"
+
+	else
+
+		echo "read_skb GFP_ATOMIC: NOT PATCHED"
+
+	fi
+
+	# 必须已经使用 skb_copy_bits，同时旧危险 memcpy 必须完全消失
+	if grep -Fq \
+		"skb_copy_bits(skb, from, msg_buf, len)" \
+		"${OAF_SRC}" \
+		&& ! grep -Fq \
+		"memcpy(msg_buf + consumed, ptr, avail);" \
+		"${OAF_SRC}"; then
+
+		echo "read_skb exact copy: OK"
+
+	else
+
+		echo "read_skb exact copy: NOT PATCHED"
+
+	fi
+fi
+
+
+# 添加自定义第三方包
+# OpenWrt-Custom 由 01_get_ready.sh 克隆生成
+cp -rf ../OpenWrt-Custom ./package/custom
+
+rm -rf package/new/openwrt_pkgs/{luci-app-netdata,luci-app-netspeedtest,luci-app-adguardhome}
+
+rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box,frp,microsocks,shadowsocks-libev,zerotier,daed,smartdns,adguardhome}
+rm -rf feeds/luci/applications/{luci-app-frps,luci-app-frpc,luci-app-zerotier,luci-app-filemanager,luci-app-smartdns,luci-app-adguardhome}
 rm -rf feeds/packages/utils/coremark
 sed -i 's/+@KERNEL_DEBUG_INFO_BTF/+vmlinux-btf/' ./package/new/openwrt-einat-ebpf/Makefile
 git clone https://github.com/QiuSimons/vmlinux-btf ./package/new/vmlinux-btf
+
+
+# Q DNS Client
+rm -rf ./feeds/packages/net/q
+cp -rf ../immortalwrt_pkg_25/net/q ./feeds/packages/net/q
+
+### AdGuardHome ###
+# 使用 ImmortalWrt openwrt-25.12 的 AdGuardHome 核心和 LuCI
+# cp -rf ../immortalwrt_pkg_25/net/adguardhome ./feeds/packages/net/adguardhome
+# cp -rf ../immortalwrt_luci_25/applications/luci-app-adguardhome ./feeds/luci/applications/luci-app-adguardhome
+
+### SmartDNS ###
+# 使用 ImmortalWrt openwrt-25.12 的 smartdns / luci-app-smartdns
+cp -rf ../immortalwrt_pkg_25/net/smartdns ./feeds/packages/net/smartdns
+cp -rf ../immortalwrt_luci_25/applications/luci-app-smartdns ./feeds/luci/applications/luci-app-smartdns
+# SmartDNS WebUI 编译依赖
+rm -rf ./feeds/packages/devel/rust-bindgen
+mkdir -p ./feeds/packages/devel
+cp -rf ../immortalwrt_pkg_25/devel/rust-bindgen  ./feeds/packages/devel/rust-bindgen
+
+SEED_NAME="${seed:-X86}"
+SEED_FILE="../SEED/${SEED_NAME}/config.seed"
+
+### AdvancedPlus：默认关闭 ZSH 后台菜单 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-advancedplus=y" "$SEED_FILE"; then
+    ADVANCEDPLUS_CONFIG="./package/custom/luci-app-advancedplus/root/etc/config/advancedplus"
+    ADVANCEDPLUS_CONFIG_BAK="./package/custom/luci-app-advancedplus/advancedplus.bak"
+
+    if [ -f "$ADVANCEDPLUS_CONFIG" ]; then
+        if grep -Fq "option usshmenu '1'" "$ADVANCEDPLUS_CONFIG"; then
+            echo "AdvancedPlus: usshmenu default already 1"
+        elif [ "$(grep -Fc 'config basic' "$ADVANCEDPLUS_CONFIG")" -eq 1 ]; then
+            [ -f "$ADVANCEDPLUS_CONFIG_BAK" ] || cp -af "$ADVANCEDPLUS_CONFIG" "$ADVANCEDPLUS_CONFIG_BAK"
+            sed -i '/^[[:space:]]*option usshmenu/d' "$ADVANCEDPLUS_CONFIG"
+            sed -i "/^config basic/a\\$(printf '\t')option usshmenu '1'" "$ADVANCEDPLUS_CONFIG"
+
+            grep -Fq "option usshmenu '1'" "$ADVANCEDPLUS_CONFIG" \
+                && echo "AdvancedPlus: usshmenu default patch applied" \
+                || echo "WARNING: AdvancedPlus usshmenu patch failed"
+        else
+            echo "AdvancedPlus: source changed, skip"
+        fi
+    else
+        echo "AdvancedPlus: config file not found, skip"
+    fi
+fi
+
+### TaskPlan：保存配置后自动刷新定时任务 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-taskplan=y" "$SEED_FILE"; then
+    TASKPLAN_UCITRACK="./package/new/luci-app-taskplan/luci-app-taskplan/root/usr/share/ucitrack/luci-app-taskplan.json"
+
+    if [ -f "$TASKPLAN_UCITRACK" ]; then
+        if grep -Fq '"config": "taskplan"' "$TASKPLAN_UCITRACK" \
+            && grep -Fq '"exec": "/etc/init.d/taskplan start"' "$TASKPLAN_UCITRACK"; then
+            echo "TaskPlan: ucitrack already present"
+        else
+            echo "TaskPlan: upstream ucitrack exists, skip overwrite"
+        fi
+    else
+        mkdir -p "$(dirname "$TASKPLAN_UCITRACK")"
+        cat > "$TASKPLAN_UCITRACK" <<'EOF'
+{
+	"config": "taskplan",
+	"exec": "/etc/init.d/taskplan start"
+}
+EOF
+        echo "TaskPlan: ucitrack created"
+    fi
+fi
+
+### KuCat Config：补充 kucat-config RPCD 执行权限 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-kucat-config=y" "$SEED_FILE"; then
+    KUCAT_ACL="./package/custom/luci-app-kucat-config/root/usr/share/rpcd/acl.d/luci-app-kucat-config.json"
+    KUCAT_ACL_BAK="./package/custom/luci-app-kucat-config/luci-app-kucat-config.json.bak"
+
+    if [ -f "$KUCAT_ACL" ]; then
+        if grep -q '"/usr/bin/kucat-config"' "$KUCAT_ACL"; then
+            echo "KuCat Config: kucat-config ACL already present"
+        elif [ "$(grep -Fc '"/etc/init.d/kucat": [ "exec" ],' "$KUCAT_ACL")" -eq 1 ]; then
+            [ -f "$KUCAT_ACL_BAK" ] || cp -af "$KUCAT_ACL" "$KUCAT_ACL_BAK"
+            grep -q '"/usr/bin/kucat-config"' "$KUCAT_ACL" || sed -i 's#^\([[:space:]]*\)"/etc/init.d/kucat": \[ "exec" \],#\1"/etc/init.d/kucat": [ "exec" ],\n\1"/usr/bin/kucat-config": [ "exec" ],#' "$KUCAT_ACL"
+
+            grep -q '"/usr/bin/kucat-config"' "$KUCAT_ACL" \
+                && echo "KuCat Config: kucat-config ACL patch applied" \
+                || echo "WARNING: KuCat Config ACL patch failed"
+        else
+            echo "KuCat Config: ACL structure changed, skip"
+        fi
+    else
+        echo "KuCat Config: ACL file not found, skip"
+    fi
+fi
+
+### KuCat Theme：默认显示完整菜单 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-theme-kucat=y" "$SEED_FILE"; then
+    KUCAT_MENU="./package/custom/luci-theme-kucat/htdocs/luci-static/resources/menu-kucat.js"
+    KUCAT_MENU_BAK="./package/custom/luci-theme-kucat/menu-kucat.js.bak"
+
+    if [ -f "$KUCAT_MENU" ]; then
+        if grep -Fq "currentCategory: 'allmenu'" "$KUCAT_MENU"; then
+            echo "KuCat Theme: allmenu default already present"
+        elif [ "$(grep -Fc "currentCategory: 'basic'" "$KUCAT_MENU")" -eq 1 ]; then
+            [ -f "$KUCAT_MENU_BAK" ] || cp -af "$KUCAT_MENU" "$KUCAT_MENU_BAK"
+            sed -i "s/currentCategory: 'basic'/currentCategory: 'allmenu'/" "$KUCAT_MENU"
+
+            grep -Fq "currentCategory: 'allmenu'" "$KUCAT_MENU" \
+                && echo "KuCat Theme: default menu changed to allmenu" \
+                || echo "WARNING: KuCat Theme patch failed"
+        else
+            echo "KuCat Theme: source changed, skip"
+        fi
+    else
+        echo "KuCat Theme: menu-kucat.js not found, skip"
+    fi
+fi
+
+### WechatPush：补充新版 rpcd 的 /proc/net/arp 真实路径读取权限 ###
+### 上游已于 2026-08 改用 luci-rpc getHostHints，暂时停用本地兼容，保留代码便于回溯
+: <<'WECHATPUSH_ARP_UPSTREAM_FIXED'
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+    WECHATPUSH_ACL="./package/new/luci-app-wechatpush/root/usr/share/rpcd/acl.d/luci-app-wechatpush.json"
+    WECHATPUSH_ACL_BAK="./package/new/luci-app-wechatpush/luci-app-wechatpush.json.bak"
+    [ -f "$WECHATPUSH_ACL_BAK" ] || cp -af "$WECHATPUSH_ACL" "$WECHATPUSH_ACL_BAK"
+    grep -q '"/proc/\*/net/arp"' "$WECHATPUSH_ACL" || sed -i '/"\/proc\/net\/arp": \[ "read" \],/a\				"/proc/*/net/arp": [ "read" ],' "$WECHATPUSH_ACL"
+fi
+
+WECHATPUSH_ARP_UPSTREAM_FIXED
+
+### WechatPush：修复温度测试失败后进入主循环 ###
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+    WECHATPUSH_SCRIPT="./package/new/luci-app-wechatpush/root/usr/share/wechatpush/wechatpush"
+    WECHATPUSH_SCRIPT_BAK="./package/new/luci-app-wechatpush/wechatpush.bak"
+
+    if [ -f "$WECHATPUSH_SCRIPT" ]; then
+        if grep -Fq 'soc_temp; exit $?' "$WECHATPUSH_SCRIPT"; then
+            echo "WechatPush soc loop: already fixed"
+        elif grep -Eq '^[[:space:]]*soc_temp[[:space:]]*&&[[:space:]]*exit[[:space:]]+\$\?[[:space:]]*$' "$WECHATPUSH_SCRIPT"; then
+            [ -f "$WECHATPUSH_SCRIPT_BAK" ] || cp -af "$WECHATPUSH_SCRIPT" "$WECHATPUSH_SCRIPT_BAK"
+            sed -Ei 's/^([[:space:]]*)soc_temp[[:space:]]*&&[[:space:]]*exit[[:space:]]+\$\?[[:space:]]*$/\1soc_temp; exit $?/' "$WECHATPUSH_SCRIPT"
+
+            grep -Fq 'soc_temp; exit $?' "$WECHATPUSH_SCRIPT" \
+                && echo "WechatPush soc loop bug fixed" \
+                || echo "WARNING: WechatPush soc loop patch failed"
+        else
+            echo "WechatPush soc loop: source changed, skip"
+        fi
+    else
+        echo "WechatPush soc loop: source file not found, skip"
+    fi
+fi
+
+### WechatPush：修复 procps-ng top 下 CPU 占用前三进程解析错误 ###
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+
+    WECHATPUSH_FILE="./package/new/luci-app-wechatpush/root/usr/share/wechatpush/wechatpush"
+
+    if [ -f "$WECHATPUSH_FILE" ]; then
+
+        if grep -Fq '# YAOF: procps-ng top3 dynamic columns minimal fix' "$WECHATPUSH_FILE"; then
+
+            echo "WechatPush CPU top3: YAOF fix already exists, skip"
+
+        elif grep -Fq 'local gettop=$(top -bn 1 | grep -v "top -bn 1" | head -n 7)' "$WECHATPUSH_FILE" \
+            && grep -Fq 'for i in $(seq 5 7); do' "$WECHATPUSH_FILE"; then
+
+            echo "WechatPush CPU top3: old parser detected, applying fix"
+
+            WECHATPUSH_TMP="$(mktemp)"
+
+            cp -p "$WECHATPUSH_FILE" "$WECHATPUSH_TMP"
+
+            cat > /tmp/wechatpush_cputop_dynamic.sed <<'SED'
+/^# CPU 占用前三[[:space:]]*$/,/^# 检测硬盘状态[[:space:]]*$/ {
+
+s@^\([[:space:]]*\)local gettop=$(top -bn 1 | grep -v "top -bn 1" | head -n 7)$@\1# YAOF: procps-ng top3 dynamic columns minimal fix\
+\1local gettop=$(LC_ALL=C top -b -n 1 -o %CPU 2>/dev/null | awk '\
+\1    $1 == "PID" {\
+\1        cpu_col = 0\
+\1        cmd_col = 0\
+\1        for (j = 1; j <= NF; j++) {\
+\1            if ($j == "%CPU" || $j == "CPU%") cpu_col = j\
+\1            if ($j == "COMMAND" || $j == "CMD") cmd_col = j\
+\1        }\
+\1        if (cpu_col > 0 \&\& cmd_col > 0) found = 1\
+\1        next\
+\1    }\
+\1    found \&\& $1 ~ /^[0-9][0-9]*$/ {\
+\1        cpu = $cpu_col\
+\1        gsub(/%/, "", cpu)\
+\1        gsub(/,/, ".", cpu)\
+\1        name = $cmd_col\
+\1        parts_count = split(name, parts, "/")\
+\1        base = parts[parts_count]\
+\1        if ((base == "sh" || base == "bash" || base == "ash") \&\& (cmd_col + 1) <= NF \&\& $(cmd_col + 1) != "") {\
+\1            name = $(cmd_col + 1)\
+\1            parts_count = split(name, parts, "/")\
+\1            base = parts[parts_count]\
+\1        }\
+\1        if ((cpu + 0) <= 0 || base == "top") next\
+\1        print cpu, name\
+\1        if (++count >= 3) exit\
+\1    }\
+\1')@
+
+s@^\([[:space:]]*\)for i in $(seq 5 7); do$@\1for i in $(seq 1 3); do@
+
+s@^\([[:space:]]*\)local top_name=.*$@\1local top_name=$(echo "${gettop}" | awk -v n="$i" 'NR==n {print $2}')@
+
+s@^\([[:space:]]*\)local top_load=.*$@\1local top_load=$(echo "${gettop}" | awk -v n="$i" 'NR==n {print $1}')\
+\1[ -z "$top_name" ] \&\& continue@
+
+s@^\([[:space:]]*\)local temp_top="${top_name} ${top_load}"$@\1local temp_top="${top_name} ${top_load}%"@
+
+}
+SED
+
+            sed -i -f /tmp/wechatpush_cputop_dynamic.sed "$WECHATPUSH_TMP"
+
+            if bash -n "$WECHATPUSH_TMP" \
+                && grep -Fq '# YAOF: procps-ng top3 dynamic columns minimal fix' "$WECHATPUSH_TMP" \
+                && ! grep -Fq 'head -n 7' "$WECHATPUSH_TMP" \
+                && ! grep -Fq 'for i in $(seq 5 7); do' "$WECHATPUSH_TMP"; then
+
+                cp -p "$WECHATPUSH_TMP" "$WECHATPUSH_FILE"
+
+                echo "WechatPush CPU top3 procps-ng fix applied"
+
+            else
+
+                echo "WARNING: WechatPush CPU top3 patch validation failed"
+                echo "WARNING: original file kept unchanged"
+
+            fi
+
+            rm -f \
+                "$WECHATPUSH_TMP" \
+                /tmp/wechatpush_cputop_dynamic.sed
+
+        else
+
+            echo "WechatPush CPU top3: source changed, review manually"
+
+        fi
+
+    else
+
+        echo "WechatPush CPU top3: source file not found, skip"
+
+    fi
+
+fi
+
+### ZeroTier：关闭状态不执行 zerotier-fw4，并补齐 peers.d 目录 ###
+if [ -f "$SEED_FILE" ] && grep -Eq "^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=y" "$SEED_FILE"; then
+    ZEROTIER_INIT="./package/new/imm_pkg/zerotier/files/etc/init.d/zerotier"
+    ZEROTIER_INIT_BAK="./package/new/imm_pkg/zerotier/zerotier.init.bak"
+
+    if [ -f "$ZEROTIER_INIT" ]; then
+        [ -f "$ZEROTIER_INIT_BAK" ] || cp -af "$ZEROTIER_INIT" "$ZEROTIER_INIT_BAK"
+
+        ### 1. 关闭状态不执行 zerotier-fw4 ###
+        ZEROTIER_SERVICE_BLOCK="$(sed -n '/^service_started() {$/,/^}$/p' "$ZEROTIER_INIT")"
+
+        if printf '%s\n' "$ZEROTIER_SERVICE_BLOCK" | grep -Fq '[ "${enabled}" -eq 1 ] || return 0'; then
+            echo "ZeroTier: disabled-state guard already present"
+        elif [ "$ZEROTIER_SERVICE_BLOCK" = "$(printf 'service_started() {\n\tzerotier-fw4 -s\n}')" ]; then
+            sed -i '/^service_started() {$/,/^}$/c\
+service_started() {\
+\tlocal enabled\
+\tconfig_load zerotier\
+\tconfig_get_bool enabled '\''global'\'' '\''enabled'\'' 0\
+\t[ "${enabled}" -eq 1 ] || return 0\
+\tzerotier-fw4 -s\
+}' "$ZEROTIER_INIT"
+
+            grep -Fq '[ "${enabled}" -eq 1 ] || return 0' "$ZEROTIER_INIT" \
+                && echo "ZeroTier: disabled-state guard patch applied" \
+                || echo "WARNING: ZeroTier guard patch failed"
+        else
+            echo "ZeroTier: service_started changed, skip guard patch"
+        fi
+
+        ### 2. 创建 ZeroTier peers.d 目录 ###
+        if grep -Fq 'mkdir -p "${CONFIG_PATH}"/networks.d "${CONFIG_PATH}"/peers.d' "$ZEROTIER_INIT" \
+            || grep -Fq 'mkdir -p "${CONFIG_PATH}"/peers.d' "$ZEROTIER_INIT"; then
+            echo "ZeroTier: peers.d creation already present"
+        elif grep -q '^[[:space:]]*mkdir -p "${CONFIG_PATH}"/networks.d$' "$ZEROTIER_INIT"; then
+            sed -i 's#^\([[:space:]]*\)mkdir -p "${CONFIG_PATH}"/networks.d$#\1mkdir -p "${CONFIG_PATH}"/networks.d "${CONFIG_PATH}"/peers.d#' "$ZEROTIER_INIT"
+
+            grep -Fq 'mkdir -p "${CONFIG_PATH}"/networks.d "${CONFIG_PATH}"/peers.d' "$ZEROTIER_INIT" \
+                && echo "ZeroTier: peers.d creation patch applied" \
+                || echo "WARNING: ZeroTier peers.d patch failed"
+        else
+            echo "ZeroTier: networks.d creation changed, skip peers.d patch"
+        fi
+    else
+        echo "ZeroTier: init script not found, skip"
+    fi
+fi
+
+### OpenClash 核心和规则预置 ###
+# 根据当前平台预置 OpenClash 核心和规则数据库
+# 只有当前平台 config.seed 选择 luci-app-openclash 时才执行
+
+OPENCLASH_DIR="package/new/OpenClash/luci-app-openclash/root/etc/openclash"
+OPENCLASH_CONFIG="package/new/OpenClash/luci-app-openclash/root/etc/config/openclash"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-openclash=y" "$SEED_FILE"; then
+    echo "luci-app-openclash is selected in ${SEED_FILE}"
+
+    if [ -d "$OPENCLASH_DIR" ]; then
+        echo "Found OpenClash directory: $OPENCLASH_DIR"
+
+        case "$SEED_NAME" in
+            X86)
+                CORE_META="https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64-v2.tar.gz"
+                ;;
+            R2C|R2S|R3S|R4S)
+                CORE_META="https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz"
+                ;;
+            *)
+                CORE_META=""
+                echo "Unknown target ${SEED_NAME}, skip OpenClash core preset"
+                ;;
+        esac
+
+        mkdir -p "$OPENCLASH_DIR/core"
+
+        curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/Country.mmdb" \
+            "https://github.com/xream/geoip/releases/latest/download/ipinfo.country.mmdb" \
+            || echo "Country.mmdb download failed, skip"
+
+        curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/GeoSite.dat" \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geosite.dat" \
+            || echo "GeoSite.dat download failed, skip"
+
+        curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/GeoIP.dat" \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geoip.dat" \
+            || echo "GeoIP.dat download failed, skip"
+
+        if [ -n "$CORE_META" ]; then
+            if curl --retry 3 --connect-timeout 15 -fL -o "$OPENCLASH_DIR/core/meta.tar.gz" "$CORE_META"; then
+                tar -zxf "$OPENCLASH_DIR/core/meta.tar.gz" -C "$OPENCLASH_DIR/core"
+
+                if [ -f "$OPENCLASH_DIR/core/clash" ]; then
+                    mv -f "$OPENCLASH_DIR/core/clash" "$OPENCLASH_DIR/core/clash_meta"
+                    chmod +x "$OPENCLASH_DIR/core/clash_meta"
+                    echo "OpenClash meta core preset done"
+                else
+                    echo "OpenClash meta core extracted, but clash binary not found"
+                fi
+
+                rm -f "$OPENCLASH_DIR/core/meta.tar.gz"
+            else
+                echo "OpenClash meta core download failed, skip core preset"
+            fi
+        fi
+
+        if [ -f "$OPENCLASH_CONFIG" ]; then
+            echo "Found OpenClash config: $OPENCLASH_CONFIG"
+
+            sed -i "s|option geo_custom_url.*|option geo_custom_url 'https://github.com/xream/geoip/releases/latest/download/ipinfo.country.mmdb'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option geosite_custom_url.*|option geosite_custom_url 'https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option geoip_custom_url.*|option geoip_custom_url 'https://testingcf.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option geoasn_custom_url.*|option geoasn_custom_url 'https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option chnr_custom_url.*|option chnr_custom_url 'https://github.com/DH-Teams/DH-Geo_AS_IP_CN/raw/main/Geo_AS_IP_CN.txt'|" "$OPENCLASH_CONFIG"
+            sed -i "s|option chnr6_custom_url.*|option chnr6_custom_url 'https://raw.githubusercontent.com/DH-Teams/DH-Geo_AS_IP_CN/main/Geo_AS_IP_CN_6.txt'|" "$OPENCLASH_CONFIG"
+            # sed -i "s|option chnr_custom_url.*|option chnr_custom_url 'https://us.cooluc.com/cidr/cn_ipv4.cidr'|" "$OPENCLASH_CONFIG"
+            # sed -i "s|option chnr6_custom_url.*|option chnr6_custom_url 'https://us.cooluc.com/cidr/cn_ipv6.cidr'|" "$OPENCLASH_CONFIG"
+            echo "OpenClash default URLs patched"
+        else
+            echo "OpenClash config file not found: $OPENCLASH_CONFIG"
+        fi
+    else
+        echo "OpenClash directory not found: $OPENCLASH_DIR"
+    fi
+else
+    echo "luci-app-openclash is not selected in ${SEED_FILE}, skip OpenClash preset"
+fi
+
+### PassWall 规则预置 ###
+# 只有当前平台 config.seed 选择 luci-app-passwall 时才更新 gfwlist
+
+PASSWALL_GFWLIST="package/new/openwrt_helloworld/luci-app-passwall/root/usr/share/passwall/rules/gfwlist"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-passwall=y" "$SEED_FILE"; then
+    echo "luci-app-passwall is selected in ${SEED_FILE}"
+
+    if [ -d "$(dirname "$PASSWALL_GFWLIST")" ]; then
+        curl --retry 3 --connect-timeout 15 -fL -o "$PASSWALL_GFWLIST" \
+            "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt" \
+            || echo "PassWall gfwlist download failed, skip"
+    else
+        echo "PassWall rules directory not found: $(dirname "$PASSWALL_GFWLIST")"
+    fi
+else
+    echo "luci-app-passwall is not selected in ${SEED_FILE}, skip PassWall gfwlist"
+fi
+
+### WeChatPush Logo 预置 ###
+# 只有当前平台 config.seed 选择 luci-app-wechatpush 时才替换 通知logo
+
+WECHATPUSH_LOGO="package/new/luci-app-wechatpush/root/usr/share/wechatpush/api/logo.jpg"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "$SEED_FILE"; then
+    echo "luci-app-wechatpush is selected in ${SEED_FILE}"
+
+    if [ -d "$(dirname "$WECHATPUSH_LOGO")" ]; then
+        curl --retry 3 --connect-timeout 15 -fL -o "$WECHATPUSH_LOGO" \
+            "https://raw.githubusercontent.com/lonecale/Groceries/main/Logo/logo.jpg" \
+            || echo "WeChatPush logo download failed, skip"
+    else
+        echo "WeChatPush logo directory not found: $(dirname "$WECHATPUSH_LOGO")"
+    fi
+else
+    echo "luci-app-wechatpush is not selected in ${SEED_FILE}, skip WeChatPush logo"
+fi
+
+### procps-ng top 默认配置预置 ###
+
+TOP_DEFAULT_RC="package/base-files/files/etc/topdefaultrc"
+
+if [ -f "$SEED_FILE" ] && grep -q "^CONFIG_PACKAGE_procps-ng-top=y" "$SEED_FILE"; then
+    echo "procps-ng-top is selected in ${SEED_FILE}"
+
+    if [ -d "$(dirname "$TOP_DEFAULT_RC")" ]; then
+        curl --retry 3 --connect-timeout 15 -fL -o "$TOP_DEFAULT_RC" \
+            "https://raw.githubusercontent.com/lonecale/Groceries/main/Diy/toprc" \
+            || echo "procps-ng top default config download failed, skip"
+    else
+        echo "top default config directory not found: $(dirname "$TOP_DEFAULT_RC")"
+    fi
+else
+    echo "procps-ng-top is not selected in ${SEED_FILE}, skip top default config"
+fi
 
 ### 获取额外的 LuCI 应用、主题和依赖 ###
 # RK
