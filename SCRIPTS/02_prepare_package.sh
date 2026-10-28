@@ -290,6 +290,11 @@ fi
 # 7. 上游相关实现发生变化时，只跳过对应本地增强，避免重复修改或错误套用旧补丁
 
 MOSDNS_PATCH_DIR="./package/new/luci-app-mosdns/mosdns/patches"
+# 兼容 OpenWrt-Add 新版 apps/ 分类目录，旧目录存在时仍优先使用旧路径。
+if [ ! -d "${MOSDNS_PATCH_DIR}" ] && [ -d "./package/new/apps/luci-app-mosdns/mosdns/patches" ]; then
+	MOSDNS_PATCH_DIR="./package/new/apps/luci-app-mosdns/mosdns/patches"
+fi
+
 MOSDNS_QUERY_PATCH="${MOSDNS_PATCH_DIR}/211-feat-add-query-log-support.patch"
 MOSDNS_ECS_PATCH="${MOSDNS_PATCH_DIR}/998-local-ecs-handler-overwrite.patch"
 MOSDNS_LOCAL_PATCH="${MOSDNS_PATCH_DIR}/999-local-debug-log-enhance.patch"
@@ -626,6 +631,118 @@ EOF
 else
 	rm -f "${MOSDNS_LOCAL_PATCH}"
 	echo "MosDNS: no local debug log enhancement required"
+fi
+
+### MosDNS：修正 Fallback 失败上游日志和获胜分支查询 ECS ###
+# 997 先于 998 / 999 应用；此段紧接现有 999 生成逻辑之后。
+# 修正 forward 失败记录和 CopyMetadataFrom 的查询 ECS 同步。
+# 多上游并发失败时，沿用上游 lastAttempted（最后发起尝试）的代表记录。
+# 不改变 Fallback 的分支选择、threshold、always_standby 或错误返回。
+
+MOSDNS_FALLBACK_PATCH="${MOSDNS_PATCH_DIR}/997-local-fallback-log-context.patch"
+MOSDNS_FALLBACK_PATCH_OK=1
+
+# 每次重新生成前清理本段补丁；兼容检查失败时不会残留旧补丁。
+rm -f "${MOSDNS_FALLBACK_PATCH}"
+
+if [ ! -d "${MOSDNS_PATCH_DIR}" ]; then
+	echo "MosDNS: patch directory not found, skip local Fallback fix"
+	MOSDNS_FALLBACK_PATCH_OK=0
+fi
+
+# 只检查本地修改依赖的上游代码特征。
+if [ "${MOSDNS_FALLBACK_PATCH_OK}" = "1" ]; then
+	if grep -RqsF '+func (ctx *Context) CopyMetadataFrom(src *Context) {' "${MOSDNS_PATCH_DIR}" \
+		&& grep -RqsE '^\+[[:space:]]*ctx\.respOpt = src\.respOpt$' "${MOSDNS_PATCH_DIR}" \
+		&& grep -RqsE '^\+[[:space:]]*ctx\.upstreamOpt = src\.upstreamOpt$' "${MOSDNS_PATCH_DIR}" \
+		&& grep -RqsE '^\+[[:space:]]*qCtx\.CopyMetadataFrom\(res\.qCtx\)$' "${MOSDNS_PATCH_DIR}" \
+		&& grep -RqsF '+func (f *Forward) setUpstream(qCtx *query_context.Context, u *upstreamWrapper) {' "${MOSDNS_PATCH_DIR}" \
+		&& [ "$(grep -RhsE '^\+[[:space:]]*if qCtx\.UpstreamSelected == nil && lastAttempted != nil \{$' "${MOSDNS_PATCH_DIR}" | wc -l)" -eq 2 ]; then
+
+		echo "MosDNS: detected known upstream Fallback metadata and forward failure handling"
+	else
+		echo "MosDNS: upstream Fallback/forward structure changed or missing, skip local Fallback fix"
+		MOSDNS_FALLBACK_PATCH_OK=0
+	fi
+fi
+
+# 上游补丁已经出现查询 ECS 同步时，不再叠加本地实现。
+if [ "${MOSDNS_FALLBACK_PATCH_OK}" = "1" ] && \
+	grep -RqsE '^\+.*src\.(QOpt\(\)|query)' "${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream already changes winning query state, skip local Fallback fix"
+	MOSDNS_FALLBACK_PATCH_OK=0
+fi
+
+# 上游补丁若已移除本地修改依赖的旧代码，停止自动套用。
+if [ "${MOSDNS_FALLBACK_PATCH_OK}" = "1" ] && \
+	grep -RqsE '^-[[:space:]]*(if qCtx\.UpstreamSelected == nil && lastAttempted != nil|ctx\.(respOpt|upstreamOpt)[[:space:]]*=[[:space:]]*src\.|func \(ctx \*Context\) CopyMetadataFrom|qCtx\.CopyMetadataFrom\(res\.qCtx\))' "${MOSDNS_PATCH_DIR}"; then
+
+	echo "MosDNS: upstream modifies Fallback fix anchors, skip local Fallback fix"
+	MOSDNS_FALLBACK_PATCH_OK=0
+fi
+
+if [ "${MOSDNS_FALLBACK_PATCH_OK}" = "1" ]; then
+	if cat > "${MOSDNS_FALLBACK_PATCH}" <<'EOF'
+--- a/pkg/query_context/context.go
++++ b/pkg/query_context/context.go
+@@ -275,6 +275,26 @@
+ 	if src == nil {
+ 		return
+ 	}
++
++	// YAOF: sync only the winning branch's query ECS, including its removal.
++	srcOpt := dns.Copy(src.QOpt()).(*dns.OPT)
++	dstOpt := ctx.QOpt()
++	opts := dstOpt.Option[:0]
++	for _, option := range dstOpt.Option {
++		if option.Option() != dns.EDNS0SUBNET {
++			opts = append(opts, option)
++		}
++	}
++	for _, option := range srcOpt.Option {
++		if option.Option() == dns.EDNS0SUBNET {
++			if ecs, ok := option.(*dns.EDNS0_SUBNET); ok {
++				ecs.Address = append([]byte(nil), ecs.Address...)
++			}
++			opts = append(opts, option)
++		}
++	}
++	dstOpt.Option = opts
++
+ 	ctx.respOpt = src.respOpt
+ 	ctx.upstreamOpt = src.upstreamOpt
+ 	ctx.UpstreamSelected = src.UpstreamSelected
+--- a/plugin/executable/forward/forward.go
++++ b/plugin/executable/forward/forward.go
+@@ -325,13 +325,13 @@
+ 
+ 			return r, nil
+ 		case <-ctx.Done():
+-			if qCtx.UpstreamSelected == nil && lastAttempted != nil {
++			if lastAttempted != nil {
+ 				f.setUpstream(qCtx, lastAttempted)
+ 			}
+ 			return nil, context.Cause(ctx)
+ 		}
+ 	}
+-	if qCtx.UpstreamSelected == nil && lastAttempted != nil {
++	if lastAttempted != nil {
+ 		f.setUpstream(qCtx, lastAttempted)
+ 	}
+ 	return nil, errors.New("all upstream servers failed")
+EOF
+	then
+		echo "MosDNS: created ${MOSDNS_FALLBACK_PATCH}"
+		echo "MosDNS: forward failure -> record current attempted upstream even with prior metadata"
+		echo "MosDNS: Fallback winner -> sync query ECS only, including clear"
+	else
+		rm -f "${MOSDNS_FALLBACK_PATCH}"
+		echo "WARNING: MosDNS local Fallback patch creation failed, partial file removed"
+	fi
+else
+	rm -f "${MOSDNS_FALLBACK_PATCH}"
+	echo "MosDNS: local Fallback fix not applied"
 fi
 
 ### OpenAppFilter：切换到 destan19 源码 ###
